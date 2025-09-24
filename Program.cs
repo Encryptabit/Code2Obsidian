@@ -8,6 +8,7 @@ using Microsoft.Build.Locator;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.MSBuild;
+using System.Xml.Linq; // added
 
 namespace Code2Obsidian
 {
@@ -123,8 +124,17 @@ namespace Code2Obsidian
 
                 foreach (var group in byFile)
                 {
+                    
+                    // ---
+                    // tags:
+                    //   - function
+                    // ---
                     var mdPath = Path.Combine(outDir, Path.GetFileNameWithoutExtension(group.Key) + ".md");
                     var sb = new StringBuilder();
+                    sb.AppendLine("---");
+                    sb.AppendLine("tags:");
+                    sb.AppendLine("  - file");
+                    sb.AppendLine("---");
                     sb.AppendLine($"# {Path.GetFileName(group.Key)}");
                     sb.AppendLine();
 
@@ -166,9 +176,19 @@ namespace Code2Obsidian
         {
             var sb = new StringBuilder();
 
+            sb.AppendLine();
             sb.AppendLine($"#### [[{method.Name}]]");
             sb.AppendLine("##### What it does:");
-            sb.AppendLine("- _TODO: Plain-English walkthrough._");
+            var doc = GetMethodDocstring(method);
+            if (!string.IsNullOrWhiteSpace(doc))
+            {
+                foreach (var line in doc.Split('\n'))
+                    sb.AppendLine(line.TrimEnd());
+            }
+            else
+            {
+                sb.AppendLine("- _TODO: Plain-English walkthrough._");
+            }
             sb.AppendLine();
             sb.AppendLine("##### Improvements:");
             sb.AppendLine("- _TODO: Suggested optimizations._");
@@ -206,6 +226,10 @@ namespace Code2Obsidian
             string sourcePath)
         {
             var sb = new StringBuilder();
+            sb.AppendLine("---");
+            sb.AppendLine("tags:");
+            sb.AppendLine("  - method");
+            sb.AppendLine("---");
             sb.AppendLine($"# {method.ContainingType?.ToDisplayString()}::{method.Name}");
             sb.AppendLine($"**Path**: `{sourcePath}`");
             sb.AppendLine();
@@ -390,6 +414,81 @@ Options:
                 return false;
 
             return true;
+        }
+
+        // --- New: Extract and format XML doc comments for methods ---
+        private static string? GetMethodDocstring(IMethodSymbol method)
+        {
+            try
+            {
+                var xml = method.GetDocumentationCommentXml(expandIncludes: true, cancellationToken: default);
+                if (string.IsNullOrWhiteSpace(xml)) return null;
+
+                // Wrap to ensure single root for parsing
+                var root = XElement.Parse($"<root>{xml}</root>");
+
+                var sb = new StringBuilder();
+
+                var summary = root.Element("summary")?.Value?.Trim();
+                if (!string.IsNullOrWhiteSpace(summary))
+                    sb.AppendLine(NormalizeSpaces(summary));
+
+                var parameters = root.Elements("param").ToList();
+                if (parameters.Count > 0)
+                {
+                    sb.AppendLine();
+                    sb.AppendLine("Parameters:");
+                    foreach (var p in parameters)
+                    {
+                        var name = p.Attribute("name")?.Value ?? "";
+                        var text = NormalizeSpaces(p.Value?.Trim() ?? "");
+                        sb.AppendLine($"- {name}: {text}");
+                    }
+                }
+
+                var returns = root.Element("returns")?.Value?.Trim();
+                if (!string.IsNullOrWhiteSpace(returns))
+                {
+                    sb.AppendLine();
+                    sb.AppendLine($"Returns: {NormalizeSpaces(returns)}");
+                }
+
+                var remarks = root.Element("remarks")?.Value?.Trim();
+                if (!string.IsNullOrWhiteSpace(remarks))
+                {
+                    sb.AppendLine();
+                    sb.AppendLine(NormalizeSpaces(remarks));
+                }
+
+                var result = sb.ToString().Trim();
+                return string.IsNullOrWhiteSpace(result) ? xml.Trim() : result;
+            }
+            catch
+            {
+                // If the XML isn't well-formed, just return the raw text
+                var fallback = method.GetDocumentationCommentXml(expandIncludes: false, cancellationToken: default);
+                return string.IsNullOrWhiteSpace(fallback) ? null : fallback.Trim();
+            }
+        }
+
+        private static string NormalizeSpaces(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return s;
+            var b = new StringBuilder(s.Length);
+            bool ws = false;
+            foreach (var ch in s)
+            {
+                if (char.IsWhiteSpace(ch))
+                {
+                    if (!ws) { b.Append(' '); ws = true; }
+                }
+                else
+                {
+                    b.Append(ch);
+                    ws = false;
+                }
+            }
+            return b.ToString().Trim();
         }
     }
 }
