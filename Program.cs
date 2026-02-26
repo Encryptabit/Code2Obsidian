@@ -65,7 +65,7 @@ internal static class Program
             using var context = await loader.LoadAsync(solutionPath, ct);
 
             // Compose pipeline (no DI container in Phase 1)
-            var analyzers = new List<IAnalyzer> { new MethodAnalyzer() };
+            var analyzers = new List<IAnalyzer> { new MethodAnalyzer(), new TypeAnalyzer() };
             var enrichers = new List<IEnricher>();
             var emitter = new ObsidianEmitter();
             var pipeline = new Pipeline.Pipeline(analyzers, enrichers, emitter);
