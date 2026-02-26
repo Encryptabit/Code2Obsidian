@@ -526,7 +526,11 @@ public sealed class ObsidianEmitter : IEmitter
             sb.AppendLine("## Dependencies");
             foreach (var dep in diDeps)
             {
-                sb.AppendLine($"- [[{Sanitize(dep.TypeNoteFullName!)}]] (`{dep.Name}`)");
+                var depType = analysis.Types.Values.FirstOrDefault(t => t.FullName == dep.TypeNoteFullName);
+                var depWikilink = depType is not null
+                    ? ResolveTypeWikilink(depType, collisionSet)
+                    : Sanitize(dep.TypeNoteFullName!);
+                sb.AppendLine($"- [[{depWikilink}]] (`{dep.Name}`)");
             }
             sb.AppendLine();
         }
