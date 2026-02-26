@@ -32,7 +32,7 @@ Opt-in LLM-generated plain-English summaries for methods and classes, with provi
 - Confirmation threshold: Claude's discretion on what constitutes "large" — small runs may auto-proceed, large runs prompt
 
 ### Caching & incremental behavior
-- Cache storage: extend existing `.code2obsidian.db` SQLite with a summaries table — one store for everything
+- Cache storage: extend existing `.code2obsidian-state.db` SQLite with a summaries table — one store for everything
 - Cache key: content hash covering signature, body, dependencies, and callers — any structural change triggers re-enrichment
 - Incremental interaction: `--incremental --enrich` only sends changed/new methods to LLM — cached summaries reused for unchanged code
 - Running `--enrich` twice on unchanged code makes zero API calls (LLM-03)

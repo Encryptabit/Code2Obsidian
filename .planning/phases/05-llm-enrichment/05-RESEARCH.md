@@ -27,7 +27,7 @@ The key implementation challenges are: (1) designing a content hash that capture
 - Before enrichment on a large codebase, display estimated API cost and prompt for confirmation (LLM-05)
 - Cost estimation should be provider-aware (use model pricing metadata from config or MEAI if available)
 - Additionally show live token progress counter during enrichment (tokens used vs estimated) -- user preference for token-centric UX
-- Cache storage: extend existing `.code2obsidian.db` SQLite with a summaries table -- one store for everything
+- Cache storage: extend existing `.code2obsidian-state.db` SQLite with a summaries table -- one store for everything
 - Cache key: content hash covering signature, body, dependencies, and callers -- any structural change triggers re-enrichment
 - Incremental interaction: `--incremental --enrich` only sends changed/new methods to LLM -- cached summaries reused for unchanged code
 - Running `--enrich` twice on unchanged code makes zero API calls (LLM-03)
