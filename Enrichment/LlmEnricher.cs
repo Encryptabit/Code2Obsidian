@@ -18,6 +18,7 @@ public sealed class LlmEnricher : IEnricher
     private readonly SummaryCache _cache;
     private readonly LlmConfig _config;
     private readonly IProgress<PipelineProgress>? _progress;
+    private readonly Func<int, int, int, decimal, bool>? _confirmEnrichment;
 
     private int _inputTokensUsed;
     private int _outputTokensUsed;
@@ -29,13 +30,21 @@ public sealed class LlmEnricher : IEnricher
         IChatClient client,
         SummaryCache cache,
         LlmConfig config,
-        IProgress<PipelineProgress>? progress = null)
+        IProgress<PipelineProgress>? progress = null,
+        Func<int, int, int, decimal, bool>? confirmEnrichment = null)
     {
         _client = client;
         _cache = cache;
         _config = config;
         _progress = progress;
+        _confirmEnrichment = confirmEnrichment;
     }
+
+    // Read-only accessors for reconstructing with a different IProgress
+    internal IChatClient Client => _client;
+    internal SummaryCache Cache => _cache;
+    internal LlmConfig Config => _config;
+    internal Func<int, int, int, decimal, bool>? ConfirmEnrichment => _confirmEnrichment;
 
     /// <summary>Human-readable name for pipeline progress display.</summary>
     public string Name => "LLM Enrichment";
@@ -105,6 +114,38 @@ public sealed class LlmEnricher : IEnricher
         ReportProgress(
             $"Found {totalEntities} entities: {EntitiesCached} cached, {uncachedCount} to enrich",
             EntitiesCached, totalEntities);
+
+        // Cost estimation and confirmation before LLM calls
+        if (uncachedCount > 0 && CostEstimator.ShouldConfirm(uncachedCount) && _confirmEnrichment is not null)
+        {
+            // Sample first few methods for average prompt size estimation
+            var sampleCount = Math.Min(5, uncachedMethods.Count);
+            var avgInputTokens = 0;
+            if (sampleCount > 0)
+            {
+                var totalSampleTokens = 0;
+                for (int i = 0; i < sampleCount; i++)
+                {
+                    var prompt = PromptBuilder.BuildMethodPrompt(uncachedMethods[i].method, analysis);
+                    totalSampleTokens += CostEstimator.EstimateTokens(PromptBuilder.SystemPrompt + prompt);
+                }
+                avgInputTokens = totalSampleTokens / sampleCount;
+            }
+            else
+            {
+                avgInputTokens = 500; // fallback estimate
+            }
+
+            var (estInputTokens, estOutputTokens, estCost) = CostEstimator.EstimateCost(
+                uncachedCount, avgInputTokens, _config.MaxOutputTokens,
+                _config.CostPerInputToken, _config.CostPerOutputToken);
+
+            if (!_confirmEnrichment(uncachedCount, estInputTokens, estOutputTokens, estCost))
+            {
+                ReportProgress("Enrichment skipped by user", EntitiesCached, totalEntities);
+                return;
+            }
+        }
 
         // Phase 3: Process uncached methods in parallel with SemaphoreSlim gating
         var methodTasks = uncachedMethods.Select(item => ProcessMethodAsync(

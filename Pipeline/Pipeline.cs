@@ -82,7 +82,7 @@ public sealed class Pipeline
         {
             progress?.Report(new PipelineProgress(
                 PipelineStage.Enriching,
-                "Enrichment skipped (Phase 1)",
+                "No enrichers configured",
                 1,
                 1));
         }

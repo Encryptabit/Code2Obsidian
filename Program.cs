@@ -4,9 +4,11 @@ using Code2Obsidian.Analysis;
 using Code2Obsidian.Analysis.Analyzers;
 using Code2Obsidian.Emission;
 using Code2Obsidian.Enrichment;
+using Code2Obsidian.Enrichment.Config;
 using Code2Obsidian.Incremental;
 using Code2Obsidian.Loading;
 using Code2Obsidian.Pipeline;
+using Microsoft.Extensions.AI;
 using Spectre.Console;
 
 namespace Code2Obsidian;
@@ -52,6 +54,31 @@ internal static class Program
             Description = "Show what would be regenerated without writing files"
         };
 
+        var enrichOption = new Option<bool>("--enrich")
+        {
+            Description = "Generate LLM-powered plain-English summaries for methods and classes"
+        };
+
+        var llmProviderOption = new Option<string?>("--llm-provider")
+        {
+            Description = "LLM provider (anthropic, openai, ollama, or custom with --llm-endpoint)"
+        };
+
+        var llmModelOption = new Option<string?>("--llm-model")
+        {
+            Description = "LLM model name (overrides config file)"
+        };
+
+        var llmApiKeyOption = new Option<string?>("--llm-api-key")
+        {
+            Description = "LLM API key or $ENV_VAR reference (overrides config file)"
+        };
+
+        var llmEndpointOption = new Option<string?>("--llm-endpoint")
+        {
+            Description = "LLM endpoint URL (overrides config file, required for custom providers)"
+        };
+
         var rootCommand = new RootCommand("Analyze a C# solution and generate an Obsidian vault")
         {
             inputArgument,
@@ -60,7 +87,12 @@ internal static class Program
             complexityThresholdOption,
             incrementalOption,
             fullRebuildOption,
-            dryRunOption
+            dryRunOption,
+            enrichOption,
+            llmProviderOption,
+            llmModelOption,
+            llmApiKeyOption,
+            llmEndpointOption
         };
 
         rootCommand.SetAction(async (parseResult, cancellationToken) =>
@@ -72,9 +104,15 @@ internal static class Program
             var incremental = parseResult.GetValue(incrementalOption);
             var fullRebuild = parseResult.GetValue(fullRebuildOption);
             var dryRun = parseResult.GetValue(dryRunOption);
+            var enrich = parseResult.GetValue(enrichOption);
+            var llmProvider = parseResult.GetValue(llmProviderOption);
+            var llmModel = parseResult.GetValue(llmModelOption);
+            var llmApiKey = parseResult.GetValue(llmApiKeyOption);
+            var llmEndpoint = parseResult.GetValue(llmEndpointOption);
 
             return await RunPipelineAsync(input, output, fanInThreshold, complexityThreshold,
-                incremental, fullRebuild, dryRun, cancellationToken);
+                incremental, fullRebuild, dryRun, enrich, llmProvider, llmModel, llmApiKey, llmEndpoint,
+                cancellationToken);
         });
 
         var parseResult = rootCommand.Parse(args);
@@ -83,7 +121,9 @@ internal static class Program
 
     private static async Task<int> RunPipelineAsync(
         string input, string? output, int fanInThreshold, int complexityThreshold,
-        bool incremental, bool fullRebuild, bool dryRun, CancellationToken ct)
+        bool incremental, bool fullRebuild, bool dryRun,
+        bool enrich, string? llmProvider, string? llmModel, string? llmApiKey, string? llmEndpoint,
+        CancellationToken ct)
     {
         try
         {
@@ -104,6 +144,84 @@ internal static class Program
 
             using var context = await loader.LoadAsync(solutionPath, ct);
 
+            // Set up enrichment if --enrich is passed
+            var enrichers = new List<IEnricher>();
+            LlmEnricher? llmEnricher = null;
+
+            if (enrich)
+            {
+                var configPath = Path.Combine(Path.GetDirectoryName(solutionPath)!, "code2obsidian.llm.json");
+                var config = LlmConfigLoader.TryLoad(configPath);
+
+                // Apply CLI overrides (JSON config for defaults, CLI flags override)
+                if (llmProvider is not null || llmModel is not null || llmApiKey is not null || llmEndpoint is not null)
+                {
+                    if (config is not null)
+                    {
+                        config = config with
+                        {
+                            Provider = llmProvider ?? config.Provider,
+                            Model = llmModel ?? config.Model,
+                            ApiKey = llmApiKey ?? config.ApiKey,
+                            Endpoint = llmEndpoint ?? config.Endpoint
+                        };
+                    }
+                    else if (llmProvider is not null && llmModel is not null)
+                    {
+                        // All required fields provided via CLI -- no config file needed
+                        config = new LlmConfig(
+                            Provider: llmProvider,
+                            Model: llmModel,
+                            ApiKey: llmApiKey,
+                            Endpoint: llmEndpoint);
+                    }
+                }
+
+                // If config is still null, run interactive setup
+                if (config is null)
+                {
+                    config = InteractiveSetup.RunSetup(configPath);
+                    if (config is null)
+                    {
+                        AnsiConsole.MarkupLine("[red]Error:[/] No LLM configuration found and interactive setup unavailable (non-interactive terminal).");
+                        AnsiConsole.MarkupLine($"[yellow]Create a config file at:[/] {Markup.Escape(configPath)}");
+                        AnsiConsole.MarkupLine("[yellow]Or provide --llm-provider and --llm-model on the command line.[/]");
+                        return 1;
+                    }
+                }
+
+                // Create IChatClient
+                IChatClient client;
+                try
+                {
+                    client = ChatClientFactory.CreateFromConfig(config);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    AnsiConsole.MarkupLine($"[red]LLM setup error:[/] {Markup.Escape(ex.Message)}");
+                    return 1;
+                }
+
+                // Create SummaryCache
+                var stateDbPath = Path.Combine(outputDir, ".code2obsidian-state.db");
+                var cache = new SummaryCache(stateDbPath);
+
+                // Create confirmation lambda for cost estimation
+                Func<int, int, int, decimal, bool> confirmEnrichment = (count, inTokens, outTokens, cost) =>
+                {
+                    AnsiConsole.MarkupLine($"[yellow]Enrichment will process {count} entities[/]");
+                    AnsiConsole.MarkupLine($"[yellow]Estimated: ~{inTokens + outTokens:N0} tokens (~${cost:F4})[/]");
+                    return AnsiConsole.Confirm("Proceed with LLM enrichment?", defaultValue: true);
+                };
+
+                // Create LlmEnricher (progress wired per execution case)
+                llmEnricher = new LlmEnricher(client, cache, config, progress: null, confirmEnrichment: confirmEnrichment);
+                enrichers.Add(llmEnricher);
+
+                AnsiConsole.MarkupLine($"[green]LLM enrichment enabled:[/] {config.Provider}/{config.Model}");
+                AnsiConsole.WriteLine();
+            }
+
             PipelineResult result;
 
             if (incremental || fullRebuild || dryRun)
@@ -117,13 +235,18 @@ internal static class Program
                     // Case D: --full-rebuild -> wipe state, run full analysis with state save
                     state.DeleteState();
                     AnsiConsole.MarkupLine("[yellow]State wiped. Performing full analysis.[/]");
+                    LlmEnricher? liveLlm = null;
                     result = await RunWithProgress(ctx =>
                     {
                         var progress = CreateProgress(ctx);
+                        var (incEnrichers, llm) = BuildEnrichersWithProgress(enrichers, progress);
+                        liveLlm = llm;
                         var incPipeline = new IncrementalPipeline(
-                            context, progress, outputDir, stateDbPath, fanInThreshold, complexityThreshold);
+                            context, progress, outputDir, stateDbPath, fanInThreshold, complexityThreshold,
+                            enrichers: incEnrichers);
                         return incPipeline.RunFullWithStateSaveAsync(ct);
                     });
+                    CopyEnrichmentMetrics(result, liveLlm);
                     result.WasIncremental = false;
                 }
                 else if (dryRun)
@@ -157,25 +280,35 @@ internal static class Program
                     {
                         // Case B: no prior state -> full analysis with state save (INFR-05)
                         AnsiConsole.MarkupLine("[yellow]No prior state found. Performing full analysis and saving state.[/]");
+                        LlmEnricher? liveLlmB = null;
                         result = await RunWithProgress(ctx =>
                         {
                             var progress = CreateProgress(ctx);
+                            var (incEnrichers, llm) = BuildEnrichersWithProgress(enrichers, progress);
+                            liveLlmB = llm;
                             var incPipeline = new IncrementalPipeline(
-                                context, progress, outputDir, stateDbPath, fanInThreshold, complexityThreshold);
+                                context, progress, outputDir, stateDbPath, fanInThreshold, complexityThreshold,
+                                enrichers: incEnrichers);
                             return incPipeline.RunFullWithStateSaveAsync(ct);
                         });
+                        CopyEnrichmentMetrics(result, liveLlmB);
                         result.WasIncremental = true;
                     }
                     else
                     {
                         // Case C: prior state exists -> run incremental two-pass flow (INFR-03)
+                        LlmEnricher? liveLlmC = null;
                         result = await RunWithProgress(ctx =>
                         {
                             var progress = CreateProgress(ctx);
+                            var (incEnrichers, llm) = BuildEnrichersWithProgress(enrichers, progress);
+                            liveLlmC = llm;
                             var incPipeline = new IncrementalPipeline(
-                                context, progress, outputDir, stateDbPath, fanInThreshold, complexityThreshold);
+                                context, progress, outputDir, stateDbPath, fanInThreshold, complexityThreshold,
+                                enrichers: incEnrichers);
                             return incPipeline.RunIncrementalAsync(state, ct);
                         });
+                        CopyEnrichmentMetrics(result, liveLlmC);
                         result.WasIncremental = true;
                     }
                 }
@@ -185,7 +318,7 @@ internal static class Program
             else
             {
                 // Case A: no incremental flags -> full analysis via existing Pipeline (no state)
-                result = await RunFullPipeline(context, outputDir, fanInThreshold, complexityThreshold, ct);
+                result = await RunFullPipeline(context, outputDir, fanInThreshold, complexityThreshold, enrichers, ct);
             }
 
             // Add loader diagnostics as warnings BEFORE rendering
@@ -235,15 +368,55 @@ internal static class Program
     }
 
     /// <summary>
+    /// Rebuilds the enrichers list with progress wired for Spectre.Console context.
+    /// LlmEnricher needs the IProgress from the live progress context, so we recreate
+    /// it with the correct progress reporter when inside the progress lambda.
+    /// Returns the new list and a reference to the new LlmEnricher (if any) for metrics collection.
+    /// </summary>
+    private static (IReadOnlyList<IEnricher> enrichers, LlmEnricher? llmEnricher) BuildEnrichersWithProgress(
+        List<IEnricher> originalEnrichers, IProgress<PipelineProgress> progress)
+    {
+        var result = new List<IEnricher>();
+        LlmEnricher? newLlm = null;
+        foreach (var enricher in originalEnrichers)
+        {
+            if (enricher is LlmEnricher llm)
+            {
+                // Reconstruct with the live progress context
+                newLlm = new LlmEnricher(
+                    llm.Client, llm.Cache, llm.Config, progress, llm.ConfirmEnrichment);
+                result.Add(newLlm);
+            }
+            else
+            {
+                result.Add(enricher);
+            }
+        }
+        return (result, newLlm);
+    }
+
+    /// <summary>
+    /// Copies enrichment metrics from a LlmEnricher to the PipelineResult.
+    /// </summary>
+    private static void CopyEnrichmentMetrics(PipelineResult result, LlmEnricher? llm)
+    {
+        if (llm is null) return;
+        result.EntitiesEnriched = llm.EntitiesEnriched;
+        result.EntitiesCached = llm.EntitiesCached;
+        result.EntitiesFailed = llm.EntitiesFailed;
+        result.InputTokensUsed = llm.InputTokensUsed;
+        result.OutputTokensUsed = llm.OutputTokensUsed;
+    }
+
+    /// <summary>
     /// Runs the full pipeline (non-incremental Case A) with Spectre.Console progress.
     /// </summary>
     private static async Task<PipelineResult> RunFullPipeline(
-        AnalysisContext context, string outputDir, int fanInThreshold, int complexityThreshold, CancellationToken ct)
+        AnalysisContext context, string outputDir, int fanInThreshold, int complexityThreshold,
+        List<IEnricher> enrichers, CancellationToken ct)
     {
         var analyzers = new List<IAnalyzer> { new MethodAnalyzer(), new TypeAnalyzer() };
-        var enrichers = new List<IEnricher>();
         var emitter = new ObsidianEmitter(fanInThreshold, complexityThreshold);
-        var pipeline = new Pipeline.Pipeline(analyzers, enrichers, emitter);
 
         PipelineResult result = null!;
 
@@ -256,53 +429,25 @@ internal static class Program
                 new ElapsedTimeColumn())
             .StartAsync(async ctx =>
             {
-                var analysisTask = ctx.AddTask("Analyzing...", maxValue: 1);
-                var enrichmentTask = ctx.AddTask("Enriching...", maxValue: 1);
-                enrichmentTask.IsIndeterminate = true;
-                var emissionTask = ctx.AddTask("Emitting...", maxValue: 1);
-                emissionTask.IsIndeterminate = true;
+                var progress = CreateProgress(ctx);
 
-                var progress = new Progress<PipelineProgress>(p =>
-                {
-                    switch (p.Stage)
-                    {
-                        case PipelineStage.Analyzing:
-                            analysisTask.Description = p.Description;
-                            if (p.Total > 0)
-                            {
-                                analysisTask.MaxValue = p.Total;
-                                analysisTask.Value = p.Current;
-                            }
-                            break;
+                // Rebuild enrichers with live progress
+                var (liveEnrichers, liveLlm) = BuildEnrichersWithProgress(enrichers, progress);
 
-                        case PipelineStage.Enriching:
-                            enrichmentTask.IsIndeterminate = false;
-                            enrichmentTask.Description = p.Description;
-                            if (p.Total > 0)
-                            {
-                                enrichmentTask.MaxValue = p.Total;
-                                enrichmentTask.Value = p.Current;
-                            }
-                            break;
-
-                        case PipelineStage.Emitting:
-                            emissionTask.IsIndeterminate = false;
-                            emissionTask.Description = p.Description;
-                            if (p.Total > 0)
-                            {
-                                emissionTask.MaxValue = p.Total;
-                                emissionTask.Value = p.Current;
-                            }
-                            break;
-                    }
-                });
-
+                var pipeline = new Pipeline.Pipeline(analyzers, liveEnrichers, emitter);
                 result = await pipeline.RunAsync(context, outputDir, progress, ct);
 
-                // Mark all tasks complete
-                analysisTask.Value = analysisTask.MaxValue;
-                enrichmentTask.Value = enrichmentTask.MaxValue;
-                emissionTask.Value = emissionTask.MaxValue;
+                // Copy enrichment metrics from the live enricher
+                if (liveLlm is not null)
+                {
+                    result.EntitiesEnriched = liveLlm.EntitiesEnriched;
+                    result.EntitiesCached = liveLlm.EntitiesCached;
+                    result.EntitiesFailed = liveLlm.EntitiesFailed;
+                    result.InputTokensUsed = liveLlm.InputTokensUsed;
+                    result.OutputTokensUsed = liveLlm.OutputTokensUsed;
+                }
+
+                // Mark all tasks complete (progress tasks handled by CreateProgress)
             });
 
         return result;
@@ -501,10 +646,31 @@ internal static class Program
             result.AnalysisDuration.ToString(@"mm\:ss\.ff"),
             analysisItems);
 
+        // Enrichment row: show metrics if enrichment ran
+        string enrichmentItems;
+        if (result.EntitiesEnriched > 0 || result.EntitiesCached > 0)
+        {
+            enrichmentItems = $"{result.EntitiesEnriched} enriched, {result.EntitiesCached} cached, {result.EntitiesFailed} failed";
+        }
+        else
+        {
+            enrichmentItems = result.EnrichersRun == 0 ? "No enrichers configured" : $"{result.EnrichersRun} enrichers";
+        }
+
         table.AddRow(
             "Enrichment",
             result.EnrichmentDuration.ToString(@"mm\:ss\.ff"),
-            result.EnrichersRun == 0 ? "skipped" : $"{result.EnrichersRun} enrichers");
+            enrichmentItems);
+
+        // Token usage row (only if tokens were used)
+        if (result.InputTokensUsed > 0 || result.OutputTokensUsed > 0)
+        {
+            var totalTokens = result.InputTokensUsed + result.OutputTokensUsed;
+            table.AddRow(
+                "  Tokens",
+                "",
+                $"{totalTokens:N0} ({result.InputTokensUsed:N0} in, {result.OutputTokensUsed:N0} out)");
+        }
 
         var emissionItems = $"{result.NotesGenerated} notes";
         if (result.WasIncremental && result.NotesDeleted > 0)

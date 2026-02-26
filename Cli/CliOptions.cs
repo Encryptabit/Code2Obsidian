@@ -9,6 +9,11 @@ namespace Code2Obsidian.Cli;
 /// Incremental enables incremental mode: only regenerate notes for changed files.
 /// FullRebuild forces state wipe and full analysis even when state exists.
 /// DryRun shows what would be regenerated without writing files.
+/// Enrich enables LLM-powered plain-English summaries for methods and classes.
+/// LlmProvider overrides the LLM provider from the config file (anthropic, openai, ollama).
+/// LlmModel overrides the LLM model name from the config file.
+/// LlmApiKey overrides the LLM API key from the config file (or $ENV_VAR reference).
+/// LlmEndpoint overrides the LLM endpoint URL from the config file.
 /// </summary>
 public sealed record CliOptions(
     string SolutionPath,
@@ -17,4 +22,9 @@ public sealed record CliOptions(
     int ComplexityThreshold = 15,
     bool Incremental = false,
     bool FullRebuild = false,
-    bool DryRun = false);
+    bool DryRun = false,
+    bool Enrich = false,
+    string? LlmProvider = null,
+    string? LlmModel = null,
+    string? LlmApiKey = null,
+    string? LlmEndpoint = null);

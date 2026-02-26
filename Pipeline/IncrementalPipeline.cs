@@ -25,6 +25,7 @@ public sealed class IncrementalPipeline
     private readonly string _stateDbPath;
     private readonly int _fanInThreshold;
     private readonly int _complexityThreshold;
+    private readonly IReadOnlyList<IEnricher> _enrichers;
 
     public IncrementalPipeline(
         AnalysisContext context,
@@ -32,7 +33,8 @@ public sealed class IncrementalPipeline
         string outputDirectory,
         string stateDbPath,
         int fanInThreshold = 10,
-        int complexityThreshold = 15)
+        int complexityThreshold = 15,
+        IReadOnlyList<IEnricher>? enrichers = null)
     {
         _context = context;
         _progress = progress;
@@ -40,6 +42,7 @@ public sealed class IncrementalPipeline
         _stateDbPath = stateDbPath;
         _fanInThreshold = fanInThreshold;
         _complexityThreshold = complexityThreshold;
+        _enrichers = enrichers ?? new List<IEnricher>();
     }
 
     /// <summary>
@@ -51,9 +54,8 @@ public sealed class IncrementalPipeline
     {
         // Run full pipeline
         var analyzers = new List<IAnalyzer> { new MethodAnalyzer(), new TypeAnalyzer() };
-        var enrichers = new List<IEnricher>();
         var emitter = new ObsidianEmitter(_fanInThreshold, _complexityThreshold);
-        var pipeline = new Pipeline(analyzers, enrichers, emitter);
+        var pipeline = new Pipeline(analyzers, _enrichers, emitter);
 
         var result = await pipeline.RunAsync(_context, _outputDirectory, _progress, ct);
 
@@ -207,8 +209,18 @@ public sealed class IncrementalPipeline
         var reanalyzedFileSet = new HashSet<string>(affectedFiles, StringComparer.OrdinalIgnoreCase);
         var mergedAnalysis = AnalysisResultMerger.Merge(freshAnalysis, state, reanalyzedFileSet);
 
-        // Enrichment pass (currently no enrichers)
+        // Enrichment pass
         var enrichedResult = new EnrichedResult(mergedAnalysis);
+        for (int i = 0; i < _enrichers.Count; i++)
+        {
+            var enricher = _enrichers[i];
+            _progress?.Report(new PipelineProgress(
+                PipelineStage.Enriching,
+                $"Running {enricher.Name}...",
+                i,
+                _enrichers.Count));
+            await enricher.EnrichAsync(mergedAnalysis, enrichedResult, ct);
+        }
 
         _progress?.Report(new PipelineProgress(
             PipelineStage.Enriching,

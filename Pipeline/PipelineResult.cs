@@ -48,6 +48,38 @@ public sealed class PipelineResult
     /// </summary>
     public EmitResult? EmitResult { get; set; }
 
+    // Enrichment metrics (populated when --enrich is used)
+
+    /// <summary>
+    /// Number of entities that received new LLM-generated summaries.
+    /// </summary>
+    public int EntitiesEnriched { get; set; }
+
+    /// <summary>
+    /// Number of entities served from the summary cache (zero API calls).
+    /// </summary>
+    public int EntitiesCached { get; set; }
+
+    /// <summary>
+    /// Number of entities where the LLM call failed.
+    /// </summary>
+    public int EntitiesFailed { get; set; }
+
+    /// <summary>
+    /// Total input tokens consumed by LLM calls.
+    /// </summary>
+    public int InputTokensUsed { get; set; }
+
+    /// <summary>
+    /// Total output tokens consumed by LLM calls.
+    /// </summary>
+    public int OutputTokensUsed { get; set; }
+
+    /// <summary>
+    /// Pre-enrichment estimate for progress display.
+    /// </summary>
+    public int EstimatedTotalTokens { get; set; }
+
     /// <summary>
     /// Warnings accumulated from all pipeline stages (skipped files, write failures, etc.).
     /// </summary>
