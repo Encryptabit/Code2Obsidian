@@ -30,5 +30,7 @@ public sealed record TypeInfo(
     IReadOnlyList<PropertyFieldInfo> Fields,
     IReadOnlyList<ConstructorInfo> Constructors,
     IReadOnlyList<MethodId> MethodIds,
-    string? DocComment
+    string? DocComment,
+    string ProjectName,
+    string AccessModifier
 );

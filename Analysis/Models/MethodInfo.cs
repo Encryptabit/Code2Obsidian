@@ -11,5 +11,9 @@ public sealed record MethodInfo(
     TypeId ContainingTypeId,
     string FilePath,
     string DisplaySignature,
-    string? DocComment
+    string? DocComment,
+    string Namespace,
+    string ProjectName,
+    string AccessModifier,
+    int CyclomaticComplexity
 );

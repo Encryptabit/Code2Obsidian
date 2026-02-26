@@ -1,4 +1,6 @@
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace Code2Obsidian.Analysis.Analyzers;
 
@@ -204,4 +206,68 @@ internal static class AnalysisHelpers
         }
         return b.ToString().Trim();
     }
+
+    /// <summary>
+    /// Computes cyclomatic complexity for a method declaration via syntax-tree walking.
+    /// Base value is 1. Each branch construct adds 1. Nested lambdas and local functions
+    /// are excluded from the containing method's complexity count.
+    /// </summary>
+    public static int ComputeCyclomaticComplexity(BaseMethodDeclarationSyntax declaration)
+    {
+        // Determine the syntax node to walk: Body (block), ExpressionBody, or neither
+        SyntaxNode? walkTarget = declaration.Body;
+        if (walkTarget is null && declaration is MethodDeclarationSyntax methodDecl)
+        {
+            walkTarget = methodDecl.ExpressionBody;
+        }
+
+        // Abstract/extern methods with no body or expression body
+        if (walkTarget is null)
+            return 1;
+
+        int complexity = 1;
+
+        foreach (var node in walkTarget.DescendantNodes(ShouldDescend))
+        {
+            switch (node)
+            {
+                case IfStatementSyntax:
+                case WhileStatementSyntax:
+                case ForStatementSyntax:
+                case ForEachStatementSyntax:
+                case DoStatementSyntax:
+                case CaseSwitchLabelSyntax:
+                case CasePatternSwitchLabelSyntax:
+                case CatchClauseSyntax:
+                case ConditionalExpressionSyntax:
+                case ConditionalAccessExpressionSyntax:
+                    complexity++;
+                    break;
+
+                case BinaryExpressionSyntax binary when
+                    binary.IsKind(SyntaxKind.LogicalAndExpression) ||
+                    binary.IsKind(SyntaxKind.LogicalOrExpression) ||
+                    binary.IsKind(SyntaxKind.CoalesceExpression):
+                    complexity++;
+                    break;
+
+                case SwitchExpressionArmSyntax arm when arm.Pattern is not DiscardPatternSyntax:
+                    complexity++;
+                    break;
+            }
+        }
+
+        return complexity;
+    }
+
+    /// <summary>
+    /// Determines whether to descend into a syntax node during complexity traversal.
+    /// Prunes nested lambdas, anonymous methods, and local functions -- these have
+    /// their own complexity and should not inflate the containing method's count.
+    /// </summary>
+    private static bool ShouldDescend(SyntaxNode node) =>
+        node is not (SimpleLambdaExpressionSyntax
+            or ParenthesizedLambdaExpressionSyntax
+            or LocalFunctionStatementSyntax
+            or AnonymousMethodExpressionSyntax);
 }
