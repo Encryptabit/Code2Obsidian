@@ -26,7 +26,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Requirements**: INFR-01, INFR-02, INFR-06
 **Success Criteria** (what must be TRUE):
   1. Running `Code2Obsidian --help` displays auto-generated help with all flags and arguments
-  2. Running analysis on a multi-project solution shows a progress bar that updates as projects and files are processed
+  2. Running analysis on a multi-project solution shows a jitter-free progress display that updates as projects and files are processed
   3. The codebase is organized as IAnalyzer, IEnricher, IEmitter pipeline stages with no analysis logic in Program.cs
 **Plans**: 2 plans
 Plans:
@@ -80,13 +80,15 @@ Plans:
 ### Phase 5: LLM Enrichment
 **Goal**: Developers can opt into LLM-generated plain-English summaries that explain what methods and classes do, with provider flexibility and cost controls
 **Depends on**: Phase 4
-**Requirements**: LLM-01, LLM-02, LLM-03, LLM-04, LLM-05
+**Requirements**: LLM-01, LLM-02, LLM-03, LLM-04, LLM-05, LLM-06, LLM-07
 **Success Criteria** (what must be TRUE):
-  1. Running with `--enrich` produces notes that include plain-English summaries explaining what each method and class does
+  1. Running with `--enrich` produces notes that include structured summaries (purpose line + detail + tags) explaining what each method and class does
   2. The LLM provider is switchable via a JSON config file between Anthropic, OpenAI, and Ollama without code changes
   3. Running `--enrich` twice on the same unchanged code does not make redundant API calls (summaries are cached by content hash)
   4. Running without `--enrich` or without any LLM configured produces a complete vault with all structural analysis, just without LLM summaries
   5. Before enrichment begins on a large codebase, the tool displays an estimated API cost and prompts for confirmation
+  6. LLM responses are parsed as structured XML with robust fallback for malformed output
+  7. LLM-generated tags are sanitized to valid YAML tokens before frontmatter insertion
 **Plans**: 3 plans
 Plans:
 - [x] 05-01-PLAN.md -- Foundation: NuGet packages, config model + loader + ChatClientFactory + interactive setup, SQLite V2 migration, SummaryCache, ContentHasher, EnrichedResult extension
@@ -105,3 +107,18 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 3. Output Quality & Metrics | 2/2 | Complete | 2026-02-26 |
 | 4. Incremental Mode | 3/3 | Complete | 2026-02-26 |
 | 5. LLM Enrichment | 3/3 | Complete | 2026-02-26 |
+
+### Phase 05.1: Structured XML Output & Progress Fix (INSERTED)
+
+**Goal:** LLM enrichment uses structured XML output parsing with robust fallback, and progress bars render jitter-free with fixed-width character bars
+**Depends on:** Phase 5
+**Requirements:** LLM-06, LLM-07, INFR-02
+**Success Criteria** (what must be TRUE):
+  1. LLM responses are parsed into structured EnrichmentResponse(Summary, Purpose, Tags) with triple-fallback (XML → regex → raw text)
+  2. LLM-generated tags appear in Obsidian frontmatter prefixed with `llm/` and sanitized to valid YAML tokens
+  3. Progress display remains stable when description text changes length (no column resize jitter)
+**Plans:** 2 plans
+
+Plans:
+- [ ] 05.1-01-PLAN.md -- Structured XML output: EnrichmentResponse record, XML parser, updated cache/enricher/emitter
+- [ ] 05.1-02-PLAN.md -- Progress bar layout fix: AnsiConsole.Live() with fixed-width character bars
