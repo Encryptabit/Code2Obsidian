@@ -10,29 +10,29 @@ See: .planning/PROJECT.md (updated 2026-02-25)
 ## Current Position
 
 Phase: 2 of 5 (Class & Type Analysis)
-Plan: 1 of 2 in current phase
-Status: Executing Phase 02. Plan 02-01 complete.
-Last activity: 2026-02-26 -- Completed 02-01-PLAN.md (type domain models + TypeAnalyzer)
+Plan: 2 of 2 in current phase (PHASE COMPLETE)
+Status: Phase 02 complete. All plans executed.
+Last activity: 2026-02-26 -- Completed 02-02-PLAN.md (class/interface note emission + pipeline wiring)
 
-Progress: [###.......] 30%
+Progress: [####......] 40%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 3
-- Average duration: 5.3 min
-- Total execution time: 0.27 hours
+- Total plans completed: 4
+- Average duration: 4.8 min
+- Total execution time: 0.32 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 01 | 2 | 11 min | 5.5 min |
-| 02 | 1 | 5 min | 5 min |
+| 02 | 2 | 8 min | 4 min |
 
 **Recent Trend:**
-- Last 5 plans: 01-01 (5 min), 01-02 (6 min), 02-01 (5 min)
-- Trend: stable
+- Last 5 plans: 01-01 (5 min), 01-02 (6 min), 02-01 (5 min), 02-02 (3 min)
+- Trend: improving
 
 ## Accumulated Context
 
@@ -54,6 +54,10 @@ Recent decisions affecting current work:
 - [02-01]: Using alias resolves TypeInfo name collision between domain model and Microsoft.CodeAnalysis.TypeInfo
 - [02-01]: AllInterfaces for implementor reverse index, Interfaces for display (STRC-04 transitive closure)
 - [02-01]: RichSignatureFormat shared between TypeAnalyzer (constructors) and MethodAnalyzer (methods)
+- [02-02]: Class notes are hub pages coexisting with method notes, not replacing them
+- [02-02]: Wikilink resolution uses knownTypes lookup -- user types get wikilinks, external types get plain text
+- [02-02]: DI dependencies deduped by TypeNoteFullName across ALL constructors
+- [02-02]: Interface notes use separate "Known Implementors" body section
 
 ### Pending Todos
 
@@ -66,5 +70,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-26
-Stopped at: Completed 02-01-PLAN.md
-Resume file: .planning/phases/02-class-type-analysis/02-01-SUMMARY.md
+Stopped at: Completed 02-02-PLAN.md (Phase 02 complete)
+Resume file: .planning/phases/02-class-type-analysis/02-02-SUMMARY.md
