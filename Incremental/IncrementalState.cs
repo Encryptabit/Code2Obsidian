@@ -452,7 +452,7 @@ public sealed class IncrementalState
     /// Updates all file path references across state tables when a source file is renamed.
     /// This ensures ripple calculation and stale note detection use the correct paths.
     /// </summary>
-    public void UpdateFilePathReferences(string oldFilePath, string newFilePath)
+    public void UpdateFilePathReferences(string oldFilePath, string newFilePath, string? solutionDir = null)
     {
         try
         {
@@ -463,10 +463,6 @@ public sealed class IncrementalState
 
             // Update emitted_notes.source_file
             ExecuteUpdate(connection, "UPDATE emitted_notes SET source_file = @new WHERE source_file = @old",
-                oldFilePath, newFilePath);
-
-            // Update file_hashes.file_path
-            ExecuteUpdate(connection, "UPDATE file_hashes SET file_path = @new WHERE file_path = @old",
                 oldFilePath, newFilePath);
 
             // Update type_references.file_path
@@ -491,6 +487,20 @@ public sealed class IncrementalState
             ExecuteUpdate(connection, "UPDATE type_index SET file_path = @new WHERE file_path = @old",
                 oldFilePath, newFilePath);
 
+            // file_hashes may store relative paths; update both absolute and relative forms
+            ExecuteUpdate(connection, "UPDATE file_hashes SET file_path = @new WHERE file_path = @old",
+                oldFilePath, newFilePath);
+            if (solutionDir is not null)
+            {
+                var oldRelative = ToRelativePath(oldFilePath, solutionDir);
+                var newRelative = ToRelativePath(newFilePath, solutionDir);
+                if (!string.Equals(oldRelative, oldFilePath, StringComparison.OrdinalIgnoreCase))
+                {
+                    ExecuteUpdate(connection, "UPDATE file_hashes SET file_path = @new WHERE file_path = @old",
+                        oldRelative, newRelative);
+                }
+            }
+
             transaction.Commit();
         }
         catch (SqliteException)
@@ -506,6 +516,13 @@ public sealed class IncrementalState
         cmd.Parameters.AddWithValue("@old", oldValue);
         cmd.Parameters.AddWithValue("@new", newValue);
         cmd.ExecuteNonQuery();
+    }
+
+    private static string ToRelativePath(string path, string solutionDir)
+    {
+        return Path.IsPathRooted(path)
+            ? Path.GetRelativePath(solutionDir, path).Replace('\\', '/')
+            : path.Replace('\\', '/');
     }
 
     // -----------------------------------------------------------------------

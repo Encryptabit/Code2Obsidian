@@ -122,7 +122,7 @@ public sealed class IncrementalPipeline
         {
             var oldAbsPath = ResolveAbsolutePath(oldRelPath, solutionDir);
             var newAbsPath = ResolveAbsolutePath(newRelPath, solutionDir);
-            RenameVaultNotes(oldAbsPath, newAbsPath);
+            RenameVaultNotes(oldAbsPath, newAbsPath, solutionDir);
         }
 
         int analyzeCount = absoluteChangedFiles.Count;
@@ -528,7 +528,7 @@ public sealed class IncrementalPipeline
     /// <summary>
     /// Renames vault notes when source files are renamed, preserving Obsidian backlinks.
     /// </summary>
-    private void RenameVaultNotes(string oldFilePath, string newFilePath)
+    private void RenameVaultNotes(string oldFilePath, string newFilePath, string solutionDir)
     {
         // Update all file path references in the state DB so that:
         // 1. Stale note detection can correctly associate notes with the new source file
@@ -536,11 +536,12 @@ public sealed class IncrementalPipeline
         // The renamed file will be reanalyzed anyway (it's in ChangedFilePaths), so fresh
         // data replaces these entries at SaveState. But correct paths are needed during
         // the pipeline run for stale detection and ripple computation.
+        // solutionDir is passed so file_hashes (stored as relative) can also be updated.
         var state = new IncrementalState(_stateDbPath);
         if (!state.TryLoad(out _))
             return;
 
-        state.UpdateFilePathReferences(oldFilePath, newFilePath);
+        state.UpdateFilePathReferences(oldFilePath, newFilePath, solutionDir);
     }
 
     // -----------------------------------------------------------------------
