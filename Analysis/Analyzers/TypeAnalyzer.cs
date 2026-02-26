@@ -75,15 +75,19 @@ public sealed class TypeAnalyzer : IAnalyzer
                     var typeInfo = ExtractTypeInfo(symbol, document.FilePath!, context.ProjectAssemblyNames);
                     builder.AddType(typeInfo);
 
-                    // Register implementors: use AllInterfaces for the reverse index
-                    // so that base interfaces also list this class as an implementor (STRC-04).
-                    foreach (var iface in symbol.AllInterfaces)
+                    // Register implementors: only concrete types (class, record, struct) —
+                    // interfaces should not appear as implementors (STRC-04).
+                    // Uses AllInterfaces so base interfaces also list this type as implementor.
+                    if (symbol.TypeKind != TypeKind.Interface)
                     {
-                        if (AnalysisHelpers.IsUserType(iface, context.ProjectAssemblyNames))
+                        foreach (var iface in symbol.AllInterfaces)
                         {
-                            builder.RegisterImplementor(
-                                TypeId.FromSymbol(iface),
-                                TypeId.FromSymbol(symbol));
+                            if (AnalysisHelpers.IsUserType(iface, context.ProjectAssemblyNames))
+                            {
+                                builder.RegisterImplementor(
+                                    TypeId.FromSymbol(iface),
+                                    TypeId.FromSymbol(symbol));
+                            }
                         }
                     }
                 }

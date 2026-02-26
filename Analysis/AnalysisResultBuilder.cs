@@ -40,8 +40,9 @@ public sealed class AnalysisResultBuilder
     }
 
     /// <summary>
-    /// Registers a class as an implementor of an interface.
+    /// Registers a concrete type as an implementor of an interface.
     /// Used to build the reverse index for interface "Known Implementors" sections.
+    /// Deduplicates entries (partial classes may register the same implementor multiple times).
     /// </summary>
     public void RegisterImplementor(TypeId interfaceId, TypeId classId)
     {
@@ -50,7 +51,8 @@ public sealed class AnalysisResultBuilder
             list = new List<TypeId>();
             _implementors[interfaceId] = list;
         }
-        list.Add(classId);
+        if (!list.Contains(classId))
+            list.Add(classId);
     }
 
     /// <summary>
