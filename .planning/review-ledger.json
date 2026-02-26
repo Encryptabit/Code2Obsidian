@@ -110,8 +110,18 @@
       "artifact_hash": null,
       "note": null,
       "recorded_at": "2026-02-26T09:43:09.254Z"
+    },
+    {
+      "entry_id": "1772100208522-cbsbau",
+      "gate": "plan",
+      "phase": "4",
+      "review_id": "4cb742cd-7b6b-4ade-8a81-57037f091489",
+      "status": "approved",
+      "artifact_hash": "656ac21370e8b12d46bd125aa0c86dc74212a7c3ccf418f93c6210a7887ba0f8",
+      "note": null,
+      "recorded_at": "2026-02-26T10:03:28.522Z"
     }
   ],
   "overrides": [],
-  "updated_at": "2026-02-26T09:43:09.255Z"
+  "updated_at": "2026-02-26T10:03:28.523Z"
 }
