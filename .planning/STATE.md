@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-02-25)
 ## Current Position
 
 Phase: 5 of 5 (LLM Enrichment)
-Plan: 1 of 3 in current phase -- COMPLETE
+Plan: 2 of 3 in current phase -- COMPLETE
 Status: Executing Phase 05
-Last activity: 2026-02-26 -- Completed 05-01 (LLM infrastructure foundation)
+Last activity: 2026-02-26 -- Completed 05-02 (Core enrichment engine)
 
-Progress: [##########] 93%
+Progress: [###########] 96%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 10
-- Average duration: 7.0 min
-- Total execution time: 1.17 hours
+- Total plans completed: 11
+- Average duration: 7.2 min
+- Total execution time: 1.32 hours
 
 **By Phase:**
 
@@ -31,11 +31,11 @@ Progress: [##########] 93%
 | 02 | 2 | 8 min | 4 min |
 | 03 | 2 | 8 min | 4 min |
 | 04 | 3 | 39 min | 13 min |
-| 05 | 1 | 8 min | 8 min |
+| 05 | 2 | 17 min | 8.5 min |
 
 **Recent Trend:**
-- Last 5 plans: 04-01 (17 min), 04-02 (9 min), 04-03 (13 min), 05-01 (8 min)
-- Trend: Phase 05 starting efficient with infrastructure-only plan
+- Last 5 plans: 04-02 (9 min), 04-03 (13 min), 05-01 (8 min), 05-02 (9 min)
+- Trend: Phase 05 maintaining efficient pace with focused enrichment plans
 
 ## Accumulated Context
 
@@ -83,6 +83,9 @@ Recent decisions affecting current work:
 - [05-01]: Anthropic SDK 12.8.0 uses ClientOptions { ApiKey } constructor, not string constructor
 - [05-01]: Unknown LLM providers fall back to OpenAI-compatible endpoint when config.Endpoint is set
 - [05-01]: BodySource added as optional last parameter with null default to avoid breaking merger stub construction
+- [05-02]: MEAI UsageDetails.InputTokenCount/OutputTokenCount are long?, cast to int for Interlocked.Add tracking
+- [05-02]: OperationCanceledException propagated (not swallowed) to honor CancellationToken semantics
+- [05-02]: Methods processed before types in enrichment ordering for deterministic behavior
 
 ### Pending Todos
 
@@ -95,5 +98,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-26
-Stopped at: Completed 05-01-PLAN.md
-Resume file: .planning/phases/05-llm-enrichment/05-02-PLAN.md
+Stopped at: Completed 05-02-PLAN.md
+Resume file: .planning/phases/05-llm-enrichment/05-03-PLAN.md
