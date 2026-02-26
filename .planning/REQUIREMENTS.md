@@ -79,37 +79,37 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| STRC-01 | — | Pending |
-| STRC-02 | — | Pending |
-| STRC-03 | — | Pending |
-| STRC-04 | — | Pending |
-| STRC-05 | — | Pending |
-| STRC-06 | — | Pending |
-| STRC-07 | — | Pending |
-| STRC-08 | — | Pending |
-| OUTP-01 | — | Pending |
-| OUTP-02 | — | Pending |
-| OUTP-03 | — | Pending |
-| OUTP-04 | — | Pending |
-| OUTP-05 | — | Pending |
-| OUTP-06 | — | Pending |
-| LLM-01 | — | Pending |
-| LLM-02 | — | Pending |
-| LLM-03 | — | Pending |
-| LLM-04 | — | Pending |
-| LLM-05 | — | Pending |
-| INFR-01 | — | Pending |
-| INFR-02 | — | Pending |
-| INFR-03 | — | Pending |
-| INFR-04 | — | Pending |
-| INFR-05 | — | Pending |
-| INFR-06 | — | Pending |
+| STRC-01 | Phase 2 | Pending |
+| STRC-02 | Phase 2 | Pending |
+| STRC-03 | Phase 2 | Pending |
+| STRC-04 | Phase 2 | Pending |
+| STRC-05 | Phase 2 | Pending |
+| STRC-06 | Phase 2 | Pending |
+| STRC-07 | Phase 3 | Pending |
+| STRC-08 | Phase 2 | Pending |
+| OUTP-01 | Phase 3 | Pending |
+| OUTP-02 | Phase 3 | Pending |
+| OUTP-03 | Phase 3 | Pending |
+| OUTP-04 | Phase 3 | Pending |
+| OUTP-05 | Phase 3 | Pending |
+| OUTP-06 | Phase 3 | Pending |
+| LLM-01 | Phase 5 | Pending |
+| LLM-02 | Phase 5 | Pending |
+| LLM-03 | Phase 5 | Pending |
+| LLM-04 | Phase 5 | Pending |
+| LLM-05 | Phase 5 | Pending |
+| INFR-01 | Phase 1 | Pending |
+| INFR-02 | Phase 1 | Pending |
+| INFR-03 | Phase 4 | Pending |
+| INFR-04 | Phase 4 | Pending |
+| INFR-05 | Phase 4 | Pending |
+| INFR-06 | Phase 1 | Pending |
 
 **Coverage:**
 - v1 requirements: 25 total
-- Mapped to phases: 0
-- Unmapped: 25 ⚠️
+- Mapped to phases: 25
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-02-25*
-*Last updated: 2026-02-25 after initial definition*
+*Last updated: 2026-02-25 after roadmap creation*
