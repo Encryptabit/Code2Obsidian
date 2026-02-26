@@ -197,10 +197,7 @@ public sealed class LlmEnricher : IEnricher
             };
 
             var response = await _client.GetResponseAsync(messages, options, ct);
-            var summary = response.Text;
-
-            if (string.IsNullOrWhiteSpace(summary))
-                return;
+            var rawText = response.Text;
 
             // Track token usage via Interlocked for thread safety
             if (response.Usage?.InputTokenCount is long inputTokens)
@@ -208,7 +205,13 @@ public sealed class LlmEnricher : IEnricher
             if (response.Usage?.OutputTokenCount is long outputTokens)
                 Interlocked.Add(ref _outputTokensUsed, (int)outputTokens);
 
-            var enrichmentResponse = ParseXmlResponse(summary);
+            var enrichmentResponse = ParseXmlResponse(rawText);
+            if (enrichmentResponse is null)
+            {
+                Interlocked.Increment(ref _entitiesFailed);
+                return;
+            }
+
             _cache.Put(method.Id.Value, hash, enrichmentResponse, _config.Model);
             enriched.MethodSummaries[method.Id.Value] = enrichmentResponse;
             Interlocked.Increment(ref _entitiesEnriched);
@@ -254,10 +257,7 @@ public sealed class LlmEnricher : IEnricher
             };
 
             var response = await _client.GetResponseAsync(messages, options, ct);
-            var summary = response.Text;
-
-            if (string.IsNullOrWhiteSpace(summary))
-                return;
+            var rawText = response.Text;
 
             // Track token usage
             if (response.Usage?.InputTokenCount is long inputTokens)
@@ -265,7 +265,13 @@ public sealed class LlmEnricher : IEnricher
             if (response.Usage?.OutputTokenCount is long outputTokens)
                 Interlocked.Add(ref _outputTokensUsed, (int)outputTokens);
 
-            var enrichmentResponse = ParseXmlResponse(summary);
+            var enrichmentResponse = ParseXmlResponse(rawText);
+            if (enrichmentResponse is null)
+            {
+                Interlocked.Increment(ref _entitiesFailed);
+                return;
+            }
+
             _cache.Put(type.Id.Value, hash, enrichmentResponse, _config.Model);
             enriched.TypeSummaries[type.Id.Value] = enrichmentResponse;
             Interlocked.Increment(ref _entitiesEnriched);
@@ -289,23 +295,64 @@ public sealed class LlmEnricher : IEnricher
     }
 
     /// <summary>
-    /// Parses structured XML response from the LLM into an EnrichmentResponse.
-    /// Extracts summary, purpose, and tags from XML tags. Falls back gracefully
-    /// if tags are missing: summary defaults to full text, purpose to empty, tags to empty array.
+    /// Parses an LLM response string into a structured EnrichmentResponse.
+    /// Uses triple fallback: XDocument parse -> regex extraction -> raw text wrapping.
+    /// Returns null if the input is null or whitespace.
     /// </summary>
-    private static EnrichmentResponse ParseXmlResponse(string text)
+    internal static EnrichmentResponse? ParseXmlResponse(string raw)
     {
-        var summaryMatch = Regex.Match(text, @"<summary>(.*?)</summary>", RegexOptions.Singleline);
-        var purposeMatch = Regex.Match(text, @"<purpose>(.*?)</purpose>", RegexOptions.Singleline);
-        var tagsMatch = Regex.Match(text, @"<tags>(.*?)</tags>", RegexOptions.Singleline);
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
 
-        var summary = summaryMatch.Success ? summaryMatch.Groups[1].Value.Trim() : text.Trim();
-        var purpose = purposeMatch.Success ? purposeMatch.Groups[1].Value.Trim() : "";
-        var tags = tagsMatch.Success
-            ? tagsMatch.Groups[1].Value.Split(',').Select(t => t.Trim()).Where(t => t.Length > 0).ToArray()
-            : Array.Empty<string>();
+        string? summary = null;
+        string? purpose = null;
+        string? tagsRaw = null;
 
-        return new EnrichmentResponse(summary, purpose, tags);
+        // Attempt 1: XDocument parse
+        try
+        {
+            var doc = XDocument.Parse($"<root>{raw}</root>");
+            summary = doc.Root?.Element("summary")?.Value;
+            purpose = doc.Root?.Element("purpose")?.Value;
+            tagsRaw = doc.Root?.Element("tags")?.Value;
+        }
+        catch (System.Xml.XmlException)
+        {
+            // Fall through to regex
+        }
+
+        // Attempt 2: Regex fallback (if XDocument didn't find content)
+        if (string.IsNullOrWhiteSpace(summary) && string.IsNullOrWhiteSpace(purpose))
+        {
+            var summaryMatch = Regex.Match(raw, @"<summary>(.*?)</summary>", RegexOptions.Singleline);
+            var purposeMatch = Regex.Match(raw, @"<purpose>(.*?)</purpose>", RegexOptions.Singleline);
+            var tagsMatch = Regex.Match(raw, @"<tags>(.*?)</tags>", RegexOptions.Singleline);
+
+            if (summaryMatch.Success) summary = summaryMatch.Groups[1].Value;
+            if (purposeMatch.Success) purpose = purposeMatch.Groups[1].Value;
+            if (tagsMatch.Success) tagsRaw = tagsMatch.Groups[1].Value;
+        }
+
+        // Apply HtmlDecode to extracted values
+        if (summary is not null) summary = WebUtility.HtmlDecode(summary);
+        if (purpose is not null) purpose = WebUtility.HtmlDecode(purpose);
+        if (tagsRaw is not null) tagsRaw = WebUtility.HtmlDecode(tagsRaw);
+
+        // Double fallback: if neither method found content, wrap raw text
+        if (string.IsNullOrWhiteSpace(summary) && string.IsNullOrWhiteSpace(purpose))
+        {
+            return new EnrichmentResponse(raw.Trim(), raw.Trim(), Array.Empty<string>());
+        }
+
+        // Parse tags
+        var tags = string.IsNullOrWhiteSpace(tagsRaw)
+            ? Array.Empty<string>()
+            : tagsRaw.Split(',').Select(t => t.Trim()).Where(t => t.Length > 0).ToArray();
+
+        return new EnrichmentResponse(
+            summary?.Trim() ?? "",
+            purpose?.Trim() ?? "",
+            tags);
     }
 
     private void ReportProgress(string description, int current, int total)
