@@ -14,9 +14,9 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: CLI Foundation & Pipeline Architecture** - Refactor monolith into pipeline, add proper CLI parsing and progress UX (completed 2026-02-26)
 - [x] **Phase 2: Class & Type Analysis** - Generate class-level notes with inheritance, interfaces, DI, and rich method signatures (completed 2026-02-26)
-- [ ] **Phase 3: Output Quality & Metrics** - Pattern detection, danger annotations, cyclomatic complexity, Dataview-compatible frontmatter
-- [ ] **Phase 4: Incremental Mode** - Git-based change detection with selective regeneration for large codebases
-- [ ] **Phase 5: LLM Enrichment** - Provider-agnostic LLM summaries with caching and cost estimation
+- [x] **Phase 3: Output Quality & Metrics** - Pattern detection, danger annotations, cyclomatic complexity, Dataview-compatible frontmatter (completed 2026-02-26)
+- [x] **Phase 4: Incremental Mode** - Git-based change detection with selective regeneration for large codebases (completed 2026-02-26)
+- [x] **Phase 5: LLM Enrichment** - Provider-agnostic LLM summaries with caching and cost estimation (completed 2026-02-26)
 
 ## Phase Details
 
@@ -89,9 +89,9 @@ Plans:
   5. Before enrichment begins on a large codebase, the tool displays an estimated API cost and prompts for confirmation
 **Plans**: 3 plans
 Plans:
-- [ ] 05-01-PLAN.md -- Foundation: NuGet packages, config model + loader + ChatClientFactory + interactive setup, SQLite V2 migration, SummaryCache, ContentHasher, EnrichedResult extension
-- [ ] 05-02-PLAN.md -- Core: LlmEnricher with cache-first logic and SemaphoreSlim concurrency, PromptBuilder, CostEstimator
-- [ ] 05-03-PLAN.md -- Integration: --enrich CLI flag, pipeline wiring, cost confirmation, token progress, emitter summary injection
+- [x] 05-01-PLAN.md -- Foundation: NuGet packages, config model + loader + ChatClientFactory + interactive setup, SQLite V2 migration, SummaryCache, ContentHasher, EnrichedResult extension
+- [x] 05-02-PLAN.md -- Core: LlmEnricher with cache-first logic and SemaphoreSlim concurrency, PromptBuilder, CostEstimator
+- [x] 05-03-PLAN.md -- Integration: --enrich CLI flag, pipeline wiring, cost confirmation, token progress, emitter summary injection
 
 ## Progress
 
@@ -102,6 +102,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 |-------|----------------|--------|-----------|
 | 1. CLI Foundation & Pipeline Architecture | 2/2 | Complete | 2026-02-26 |
 | 2. Class & Type Analysis | 2/2 | Complete | 2026-02-26 |
-| 3. Output Quality & Metrics | 0/2 | In progress | - |
-| 4. Incremental Mode | 0/3 | Not started | - |
-| 5. LLM Enrichment | 0/3 | Not started | - |
+| 3. Output Quality & Metrics | 2/2 | Complete | 2026-02-26 |
+| 4. Incremental Mode | 3/3 | Complete | 2026-02-26 |
+| 5. LLM Enrichment | 3/3 | Complete | 2026-02-26 |
