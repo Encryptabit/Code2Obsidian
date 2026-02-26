@@ -72,7 +72,7 @@ public sealed class TypeAnalyzer : IAnalyzer
                     if (symbol is null) continue;
                     if (!AnalysisHelpers.IsUserType(symbol, context.ProjectAssemblyNames)) continue;
 
-                    var typeInfo = ExtractTypeInfo(symbol, document.FilePath!, context.ProjectAssemblyNames);
+                    var typeInfo = ExtractTypeInfo(symbol, document.FilePath!, context.ProjectAssemblyNames, project.Name);
                     builder.AddType(typeInfo);
 
                     // Register implementors: only concrete types (class, record, struct) —
@@ -98,7 +98,8 @@ public sealed class TypeAnalyzer : IAnalyzer
     private static TypeInfo ExtractTypeInfo(
         INamedTypeSymbol symbol,
         string documentFilePath,
-        IReadOnlySet<string> projectAssemblyNames)
+        IReadOnlySet<string> projectAssemblyNames,
+        string projectName)
     {
         var id = TypeId.FromSymbol(symbol);
         var name = symbol.Name;
@@ -190,7 +191,9 @@ public sealed class TypeAnalyzer : IAnalyzer
             Fields: fields,
             Constructors: constructors,
             MethodIds: methodIds,
-            DocComment: docComment);
+            DocComment: docComment,
+            ProjectName: projectName,
+            AccessModifier: AnalysisHelpers.AccessibilityToString(symbol.DeclaredAccessibility));
     }
 
     private static TypeKindInfo MapTypeKind(INamedTypeSymbol symbol)

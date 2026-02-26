@@ -91,7 +91,11 @@ public sealed class MethodAnalyzer : IAnalyzer
                         ContainingTypeId: typeId,
                         FilePath: document.FilePath!,
                         DisplaySignature: symbol.ToDisplayString(AnalysisHelpers.RichSignatureFormat),
-                        DocComment: AnalysisHelpers.GetMethodDocstring(symbol)
+                        DocComment: AnalysisHelpers.GetMethodDocstring(symbol),
+                        Namespace: containingType?.ContainingNamespace?.ToDisplayString() ?? "",
+                        ProjectName: project.Name,
+                        AccessModifier: AnalysisHelpers.AccessibilityToString(symbol.DeclaredAccessibility),
+                        CyclomaticComplexity: AnalysisHelpers.ComputeCyclomaticComplexity(declaration)
                     );
 
                     builder.AddMethod(methodInfo);
