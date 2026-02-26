@@ -4,7 +4,7 @@ using Microsoft.Data.Sqlite;
 namespace Code2Obsidian.Enrichment;
 
 /// <summary>
-/// Reads and writes LLM-generated summaries in the SQLite summaries table.
+/// Reads and writes LLM-generated structured enrichment data in the SQLite summaries table.
 /// Follows IncrementalState's open-per-operation pattern (NOT IDisposable).
 /// Cache entries are keyed by entity_id + content_hash; a stale hash means cache miss.
 /// </summary>
@@ -18,21 +18,33 @@ public sealed class SummaryCache
     }
 
     /// <summary>
-    /// Attempts to retrieve a cached summary for the given entity and content hash.
+    /// Attempts to retrieve a cached enrichment response for the given entity and content hash.
     /// Returns null on cache miss (no entry or stale hash) or on database error (graceful corruption).
+    /// Tags are stored as comma-separated string; on read, split by comma and trim each element.
     /// </summary>
-    public string? TryGet(string entityId, string currentContentHash)
+    public EnrichmentResponse? TryGet(string entityId, string currentContentHash)
     {
         try
         {
             using var connection = OpenConnection();
 
             using var cmd = connection.CreateCommand();
-            cmd.CommandText = "SELECT summary_text FROM summaries WHERE entity_id = @id AND content_hash = @hash";
+            cmd.CommandText = "SELECT summary, purpose, tags FROM summaries WHERE entity_id = @id AND content_hash = @hash";
             cmd.Parameters.AddWithValue("@id", entityId);
             cmd.Parameters.AddWithValue("@hash", currentContentHash);
 
-            return cmd.ExecuteScalar() as string;
+            using var reader = cmd.ExecuteReader();
+            if (!reader.Read())
+                return null;
+
+            var summary = reader.GetString(0);
+            var purpose = reader.GetString(1);
+            var tagsRaw = reader.GetString(2);
+            var tags = string.IsNullOrWhiteSpace(tagsRaw)
+                ? Array.Empty<string>()
+                : tagsRaw.Split(',').Select(t => t.Trim()).Where(t => t.Length > 0).ToArray();
+
+            return new EnrichmentResponse(summary, purpose, tags);
         }
         catch (SqliteException)
         {
@@ -42,21 +54,24 @@ public sealed class SummaryCache
     }
 
     /// <summary>
-    /// Stores or updates a summary for the given entity with its content hash and model ID.
+    /// Stores or updates an enrichment response for the given entity with its content hash and model ID.
     /// Uses INSERT OR REPLACE to handle both new entries and hash changes.
+    /// Tags are stored as a comma-separated string.
     /// </summary>
-    public void Put(string entityId, string contentHash, string summaryText, string modelId)
+    public void Put(string entityId, string contentHash, EnrichmentResponse response, string modelId)
     {
         using var connection = OpenConnection();
 
         using var cmd = connection.CreateCommand();
         cmd.CommandText = """
-            INSERT OR REPLACE INTO summaries (entity_id, content_hash, summary_text, model_id, created_at)
-            VALUES (@id, @hash, @text, @model, @time)
+            INSERT OR REPLACE INTO summaries (entity_id, content_hash, summary, purpose, tags, model_id, created_at)
+            VALUES (@id, @hash, @summary, @purpose, @tags, @model, @time)
             """;
         cmd.Parameters.AddWithValue("@id", entityId);
         cmd.Parameters.AddWithValue("@hash", contentHash);
-        cmd.Parameters.AddWithValue("@text", summaryText);
+        cmd.Parameters.AddWithValue("@summary", response.Summary);
+        cmd.Parameters.AddWithValue("@purpose", response.Purpose);
+        cmd.Parameters.AddWithValue("@tags", string.Join(", ", response.Tags));
         cmd.Parameters.AddWithValue("@model", modelId);
         cmd.Parameters.AddWithValue("@time", DateTime.UtcNow.ToString("o"));
 

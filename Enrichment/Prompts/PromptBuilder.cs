@@ -10,13 +10,14 @@ namespace Code2Obsidian.Enrichment.Prompts;
 public static class PromptBuilder
 {
     /// <summary>
-    /// System prompt instructing the LLM to write concise, technical summaries.
+    /// System prompt instructing the LLM to respond in structured XML format.
     /// </summary>
     public static string SystemPrompt { get; } =
-        "You are a code documentation assistant. Write concise, technical summaries for experienced developers. " +
-        "Assume domain knowledge. Reference implementation details. Do not explain basic programming concepts. " +
-        "For simple methods, write a single sentence. For complex methods, write a short paragraph (2-4 sentences). " +
-        "For classes, describe the class's role and primary responsibility, not its member list.";
+        "Analyze the code entity, then respond ONLY with these XML tags:\n" +
+        "<summary>1-4 sentence technical summary for experienced developers. Reference implementation details.</summary>\n" +
+        "<purpose>Single sentence describing what this code does.</purpose>\n" +
+        "<tags>comma-separated: entry-point, data-access, async, utility, factory, DI, validation, error-handling</tags>\n" +
+        "No preamble or text outside these tags.";
 
     /// <summary>
     /// Builds a user prompt for summarizing a C# method.

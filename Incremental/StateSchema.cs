@@ -41,7 +41,7 @@ public static class StateSchema
     }
 
     /// <summary>
-    /// Adds the summaries table for LLM enrichment caching.
+    /// Adds the summaries table for LLM enrichment caching with structured columns.
     /// Existing V1 tables are untouched; IF NOT EXISTS ensures idempotency.
     /// </summary>
     private static void MigrateToV2(SqliteConnection connection)
@@ -53,7 +53,9 @@ public static class StateSchema
             CREATE TABLE IF NOT EXISTS summaries (
                 entity_id TEXT PRIMARY KEY,
                 content_hash TEXT NOT NULL,
-                summary_text TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                purpose TEXT NOT NULL,
+                tags TEXT NOT NULL,
                 model_id TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
