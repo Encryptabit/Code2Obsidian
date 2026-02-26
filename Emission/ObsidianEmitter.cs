@@ -1,4 +1,5 @@
 ﻿using System.Text;
+using System.Text.RegularExpressions;
 using Code2Obsidian.Analysis;
 using Code2Obsidian.Analysis.Models;
 using Code2Obsidian.Enrichment;
@@ -291,6 +292,15 @@ public sealed class ObsidianEmitter : IEmitter
             sb.AppendLine("  - danger/high-fan-in");
         if (method.CyclomaticComplexity >= _complexityThreshold)
             sb.AppendLine("  - danger/high-complexity");
+        if (enrichment is not null)
+        {
+            foreach (var tag in enrichment.Tags)
+            {
+                var sanitized = SanitizeTag(tag);
+                if (sanitized.Length > 0)
+                    sb.AppendLine($"  - llm/{sanitized}");
+            }
+        }
         sb.AppendLine("---");
 
         // Header
@@ -318,12 +328,9 @@ public sealed class ObsidianEmitter : IEmitter
         if (enrichment is not null)
         {
             sb.AppendLine("## Summary");
+            sb.AppendLine($"**{enrichment.Purpose}**");
+            sb.AppendLine();
             sb.AppendLine(enrichment.Summary);
-            if (!string.IsNullOrWhiteSpace(enrichment.Purpose))
-            {
-                sb.AppendLine();
-                sb.AppendLine($"**Purpose**: {enrichment.Purpose}");
-            }
             sb.AppendLine();
         }
 
@@ -495,6 +502,15 @@ public sealed class ObsidianEmitter : IEmitter
         sb.AppendLine("  - class");
         if (detectedPattern is not null)
             sb.AppendLine($"  - pattern/{detectedPattern}");
+        if (enrichment is not null)
+        {
+            foreach (var tag in enrichment.Tags)
+            {
+                var sanitized = SanitizeTag(tag);
+                if (sanitized.Length > 0)
+                    sb.AppendLine($"  - llm/{sanitized}");
+            }
+        }
         sb.AppendLine("---");
         sb.AppendLine();
 
@@ -521,12 +537,9 @@ public sealed class ObsidianEmitter : IEmitter
         if (enrichment is not null)
         {
             sb.AppendLine("## Summary");
+            sb.AppendLine($"**{enrichment.Purpose}**");
+            sb.AppendLine();
             sb.AppendLine(enrichment.Summary);
-            if (!string.IsNullOrWhiteSpace(enrichment.Purpose))
-            {
-                sb.AppendLine();
-                sb.AppendLine($"**Purpose**: {enrichment.Purpose}");
-            }
             sb.AppendLine();
         }
 
@@ -659,6 +672,15 @@ public sealed class ObsidianEmitter : IEmitter
         sb.AppendLine("  - interface");
         if (detectedPattern is not null)
             sb.AppendLine($"  - pattern/{detectedPattern}");
+        if (enrichment is not null)
+        {
+            foreach (var tag in enrichment.Tags)
+            {
+                var sanitized = SanitizeTag(tag);
+                if (sanitized.Length > 0)
+                    sb.AppendLine($"  - llm/{sanitized}");
+            }
+        }
         sb.AppendLine("---");
         sb.AppendLine();
 
@@ -685,12 +707,9 @@ public sealed class ObsidianEmitter : IEmitter
         if (enrichment is not null)
         {
             sb.AppendLine("## Summary");
+            sb.AppendLine($"**{enrichment.Purpose}**");
+            sb.AppendLine();
             sb.AppendLine(enrichment.Summary);
-            if (!string.IsNullOrWhiteSpace(enrichment.Purpose))
-            {
-                sb.AppendLine();
-                sb.AppendLine($"**Purpose**: {enrichment.Purpose}");
-            }
             sb.AppendLine();
         }
 
@@ -786,6 +805,17 @@ public sealed class ObsidianEmitter : IEmitter
             normalized = normalized.Substring(1);
 
         return normalized;
+    }
+
+    /// <summary>
+    /// Sanitizes an LLM-generated tag for YAML frontmatter.
+    /// Lowercases, trims whitespace, strips non-alphanumeric chars except hyphen, discards empty.
+    /// </summary>
+    private static string SanitizeTag(string tag)
+    {
+        var sanitized = tag.Trim().ToLowerInvariant();
+        sanitized = Regex.Replace(sanitized, @"[^a-z0-9\-]", "");
+        return sanitized;
     }
 
     /// <summary>
