@@ -530,22 +530,17 @@ public sealed class IncrementalPipeline
     /// </summary>
     private void RenameVaultNotes(string oldFilePath, string newFilePath)
     {
-        // Find notes in the vault that were emitted from the old file path
+        // Update all file path references in the state DB so that:
+        // 1. Stale note detection can correctly associate notes with the new source file
+        // 2. Ripple calculation uses the new file path for callers/callees/type references
+        // The renamed file will be reanalyzed anyway (it's in ChangedFilePaths), so fresh
+        // data replaces these entries at SaveState. But correct paths are needed during
+        // the pipeline run for stale detection and ripple computation.
         var state = new IncrementalState(_stateDbPath);
         if (!state.TryLoad(out _))
             return;
 
-        var emittedNotes = state.GetEmittedNotes();
-        foreach (var (notePath, (sourceFile, _)) in emittedNotes)
-        {
-            if (string.Equals(sourceFile, oldFilePath, StringComparison.OrdinalIgnoreCase))
-            {
-                // Note was from the old file -- it will be regenerated with new content.
-                // The rename is handled implicitly: the old note stays, and a new note
-                // is generated. Stale detection will clean up the old note if its entity
-                // ID changed.
-            }
-        }
+        state.UpdateFilePathReferences(oldFilePath, newFilePath);
     }
 
     // -----------------------------------------------------------------------
@@ -587,9 +582,10 @@ public sealed class IncrementalPipeline
     {
         // Determine current commit SHA from git (best effort)
         string? commitSha = null;
+        string? solutionDir = null;
         try
         {
-            var solutionDir = Path.GetDirectoryName(
+            solutionDir = Path.GetDirectoryName(
                 _context.Solution.FilePath ?? _outputDirectory);
             if (solutionDir is not null)
             {
@@ -604,13 +600,13 @@ public sealed class IncrementalPipeline
         }
 
         // 1. File hashes: compute SHA256 for affected files, merge with stored for unchanged
-        var fileHashes = BuildFileHashes(analysis, affectedFiles, priorState);
+        var fileHashes = BuildFileHashes(analysis, affectedFiles, priorState, solutionDir);
 
         // 2. Call edges from analysis call graph
         var callEdges = BuildCallEdges(analysis);
 
-        // 3. Type references
-        var typeReferences = BuildTypeReferences(analysis);
+        // 3. Type references (preserve prior state for unchanged files)
+        var typeReferences = BuildTypeReferences(analysis, affectedFiles, priorState);
 
         // 4. Type files: which files define each type
         var typeFiles = BuildTypeFiles(analysis);
@@ -618,8 +614,8 @@ public sealed class IncrementalPipeline
         // 5. Emitted notes from emission result
         var emittedNotes = BuildEmittedNotes(emitResult, priorState, affectedFiles);
 
-        // 6. Type metadata for structural change detection
-        var typeMetadata = BuildTypeMetadata(analysis);
+        // 6. Type metadata for structural change detection (preserve prior state for unchanged files)
+        var typeMetadata = BuildTypeMetadata(analysis, affectedFiles, priorState);
 
         // 7. Method index for collision detection
         var methodIndex = BuildMethodIndex(analysis);
@@ -642,7 +638,8 @@ public sealed class IncrementalPipeline
     private Dictionary<string, string> BuildFileHashes(
         AnalysisResult analysis,
         IReadOnlySet<string>? affectedFiles,
-        IncrementalState? priorState)
+        IncrementalState? priorState,
+        string? solutionDir)
     {
         var hashes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
@@ -651,8 +648,14 @@ public sealed class IncrementalPipeline
         {
             foreach (var (path, hash) in priorState.GetFileHashes())
             {
-                if (!affectedFiles.Contains(path))
-                    hashes[path] = hash;
+                // Stored hashes may be absolute (legacy) or relative.
+                // Convert to absolute for affectedFiles check.
+                var absolutePath = solutionDir is not null && !Path.IsPathRooted(path)
+                    ? Path.GetFullPath(Path.Combine(solutionDir, path))
+                    : path;
+
+                if (!affectedFiles.Contains(absolutePath))
+                    hashes[NormalizeToRelative(path, solutionDir)] = hash;
             }
         }
 
@@ -663,7 +666,7 @@ public sealed class IncrementalPipeline
         foreach (var type in analysis.Types.Values)
             filePaths.Add(type.FilePath);
 
-        // Compute hashes for analyzed files
+        // Compute hashes for analyzed files, storing as relative paths
         foreach (var filePath in filePaths)
         {
             if (affectedFiles is not null && !affectedFiles.Contains(filePath))
@@ -672,7 +675,10 @@ public sealed class IncrementalPipeline
             try
             {
                 if (File.Exists(filePath))
-                    hashes[filePath] = HashChangeDetector.ComputeFileHash(filePath);
+                {
+                    var key = NormalizeToRelative(filePath, solutionDir);
+                    hashes[key] = HashChangeDetector.ComputeFileHash(filePath);
+                }
             }
             catch
             {
@@ -681,6 +687,18 @@ public sealed class IncrementalPipeline
         }
 
         return hashes;
+    }
+
+    /// <summary>
+    /// Normalizes a file path to a forward-slash relative path for consistent hash key storage.
+    /// If the path is already relative, just normalizes slashes.
+    /// </summary>
+    private static string NormalizeToRelative(string path, string? solutionDir)
+    {
+        if (solutionDir is not null && Path.IsPathRooted(path))
+            return Path.GetRelativePath(solutionDir, path).Replace('\\', '/');
+
+        return path.Replace('\\', '/');
     }
 
     private static List<(string CallerId, string CalleeId, string CallerFile, string CalleeFile)> BuildCallEdges(
@@ -707,22 +725,44 @@ public sealed class IncrementalPipeline
         return edges;
     }
 
-    private static List<(string TypeId, string FilePath)> BuildTypeReferences(AnalysisResult analysis)
+    private static List<(string TypeId, string FilePath)> BuildTypeReferences(
+        AnalysisResult analysis,
+        IReadOnlySet<string>? affectedFiles,
+        IncrementalState? priorState)
     {
         var refs = new List<(string, string)>();
         var seen = new HashSet<(string, string)>();
 
-        // Each method's containing type is referenced by the method's file
+        // If incremental, carry forward prior type_references for unchanged files
+        if (affectedFiles is not null && priorState is not null)
+        {
+            foreach (var (typeId, filePath) in priorState.GetTypeReferences())
+            {
+                if (!affectedFiles.Contains(filePath))
+                {
+                    var key = (typeId, filePath);
+                    if (seen.Add(key))
+                        refs.Add(key);
+                }
+            }
+        }
+
+        // Build fresh refs only from types/methods in affected files (or all if full rebuild)
         foreach (var method in analysis.Methods.Values)
         {
+            if (affectedFiles is not null && !affectedFiles.Contains(method.FilePath))
+                continue;
+
             var key = (method.ContainingTypeId.Value, method.FilePath);
             if (seen.Add(key))
                 refs.Add(key);
         }
 
-        // Types that reference other types (base class, interfaces, DI deps)
         foreach (var type in analysis.Types.Values)
         {
+            if (affectedFiles is not null && !affectedFiles.Contains(type.FilePath))
+                continue;
+
             // Base class reference
             if (type.BaseClassFullName is not null)
             {
@@ -806,11 +846,38 @@ public sealed class IncrementalPipeline
     }
 
     private static List<(string TypeId, string? BaseClass, string Interfaces, string Namespace)> BuildTypeMetadata(
-        AnalysisResult analysis)
+        AnalysisResult analysis,
+        IReadOnlySet<string>? affectedFiles,
+        IncrementalState? priorState)
     {
         var metadata = new List<(string, string?, string, string)>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        // If incremental, carry forward prior type_metadata for types in unchanged files
+        if (affectedFiles is not null && priorState is not null)
+        {
+            var priorTypeIndex = priorState.GetTypeIndex();
+            var priorMetadata = priorState.GetTypeMetadata();
+
+            foreach (var (typeIdStr, (_, _, filePath, _)) in priorTypeIndex)
+            {
+                if (!affectedFiles.Contains(filePath) && priorMetadata.TryGetValue(typeIdStr, out var meta))
+                {
+                    metadata.Add((typeIdStr, meta.BaseClass, meta.Interfaces, meta.Namespace));
+                    seen.Add(typeIdStr);
+                }
+            }
+        }
+
+        // Build fresh metadata for types in affected files (or all if full rebuild)
         foreach (var type in analysis.Types.Values)
         {
+            if (affectedFiles is not null && !affectedFiles.Contains(type.FilePath))
+                continue;
+
+            if (!seen.Add(type.Id.Value))
+                continue;
+
             var interfaces = string.Join(",",
                 type.InterfaceFullNames.OrderBy(i => i, StringComparer.Ordinal));
             metadata.Add((type.Id.Value, type.BaseClassFullName, interfaces, type.Namespace));

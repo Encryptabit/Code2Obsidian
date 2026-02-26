@@ -448,6 +448,66 @@ public sealed class IncrementalState
         TryDeleteFile(DbPath + "-shm");
     }
 
+    /// <summary>
+    /// Updates all file path references across state tables when a source file is renamed.
+    /// This ensures ripple calculation and stale note detection use the correct paths.
+    /// </summary>
+    public void UpdateFilePathReferences(string oldFilePath, string newFilePath)
+    {
+        try
+        {
+            using var connection = OpenConnection();
+            StateSchema.EnsureSchema(connection);
+
+            using var transaction = connection.BeginTransaction();
+
+            // Update emitted_notes.source_file
+            ExecuteUpdate(connection, "UPDATE emitted_notes SET source_file = @new WHERE source_file = @old",
+                oldFilePath, newFilePath);
+
+            // Update file_hashes.file_path
+            ExecuteUpdate(connection, "UPDATE file_hashes SET file_path = @new WHERE file_path = @old",
+                oldFilePath, newFilePath);
+
+            // Update type_references.file_path
+            ExecuteUpdate(connection, "UPDATE type_references SET file_path = @new WHERE file_path = @old",
+                oldFilePath, newFilePath);
+
+            // Update type_files.file_path
+            ExecuteUpdate(connection, "UPDATE type_files SET file_path = @new WHERE file_path = @old",
+                oldFilePath, newFilePath);
+
+            // Update call_edges caller/callee file paths
+            ExecuteUpdate(connection, "UPDATE call_edges SET caller_file = @new WHERE caller_file = @old",
+                oldFilePath, newFilePath);
+            ExecuteUpdate(connection, "UPDATE call_edges SET callee_file = @new WHERE callee_file = @old",
+                oldFilePath, newFilePath);
+
+            // Update method_index.file_path
+            ExecuteUpdate(connection, "UPDATE method_index SET file_path = @new WHERE file_path = @old",
+                oldFilePath, newFilePath);
+
+            // Update type_index.file_path
+            ExecuteUpdate(connection, "UPDATE type_index SET file_path = @new WHERE file_path = @old",
+                oldFilePath, newFilePath);
+
+            transaction.Commit();
+        }
+        catch (SqliteException)
+        {
+            // Best effort -- state will be fully rebuilt on next SaveState anyway
+        }
+    }
+
+    private static void ExecuteUpdate(SqliteConnection connection, string sql, string oldValue, string newValue)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = sql;
+        cmd.Parameters.AddWithValue("@old", oldValue);
+        cmd.Parameters.AddWithValue("@new", newValue);
+        cmd.ExecuteNonQuery();
+    }
+
     // -----------------------------------------------------------------------
     //  Private insert helpers
     // -----------------------------------------------------------------------

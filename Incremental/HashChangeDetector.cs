@@ -26,6 +26,17 @@ public sealed class HashChangeDetector : IChangeDetector
             return new ChangeSet([], CommitSha: null, IsFullRebuild: true);
         }
 
+        // Normalize stored hash keys to forward-slash relative paths for consistent
+        // comparison. Stored hashes may be absolute (legacy) or already relative.
+        var normalizedHashes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (path, hash) in storedHashes)
+        {
+            var relativePath = Path.IsPathRooted(path)
+                ? Path.GetRelativePath(repoOrProjectPath, path).Replace('\\', '/')
+                : path.Replace('\\', '/');
+            normalizedHashes[relativePath] = hash;
+        }
+
         var changes = new List<FileChange>();
 
         // Enumerate all current .cs files under the project path.
@@ -41,7 +52,7 @@ public sealed class HashChangeDetector : IChangeDetector
 
             var currentHash = ComputeFileHash(filePath);
 
-            if (!storedHashes.TryGetValue(relativePath, out var storedHash))
+            if (!normalizedHashes.TryGetValue(relativePath, out var storedHash))
             {
                 // File not in stored state -- it's new.
                 changes.Add(new FileChange(relativePath, OldPath: null, FileChangeKind.Added));
@@ -55,7 +66,7 @@ public sealed class HashChangeDetector : IChangeDetector
         }
 
         // Files in stored state but not on disk are deleted.
-        foreach (var storedPath in storedHashes.Keys)
+        foreach (var storedPath in normalizedHashes.Keys)
         {
             if (!currentFiles.Contains(storedPath))
             {
