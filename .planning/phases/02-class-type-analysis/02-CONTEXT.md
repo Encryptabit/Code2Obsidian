@@ -8,7 +8,7 @@
 
 Every class and interface in the analyzed solution gets its own Obsidian note with structural context — inheritance, interfaces, members, DI dependencies, and rich method signatures. Per-method notes continue to exist; class notes act as hub pages linking to them.
 
-**New notes created in Phase 2** (class notes, interface notes) use correct `[[ClassName.MethodName]]` and `[[ClassName]]` wikilink format from the start. Existing method note link rewrites (fixing "Calls →" / "Called-by ←" to use `[[ClassName.MethodName]]` format) are deferred to Phase 3 (OUTP-01: collision-free wikilinks).
+**New notes created in Phase 2** (class notes, interface notes) use correct `[[ContainingType.MethodName]]` format for member links and `[[Sanitize(FullName)]]` format for type relationship links from the start. All type wikilinks in Phase 2 use fully-qualified FullName-based targets matching `Sanitize(FullName).md`. Existing method note link rewrites (fixing "Calls →" / "Called-by ←" to use `[[ClassName.MethodName]]` format) are deferred to Phase 3 (OUTP-01: collision-free wikilinks).
 
 Phase 2 introduces minimal YAML frontmatter for type-relationship fields only (base class, interfaces, namespace). Phase 3 owns the full frontmatter expansion: metrics, pattern tags, Dataview-compatible fields, and danger annotations. Phase 5 handles LLM enrichment (the "What it does" / "Improvements" TODO sections).
 
@@ -24,8 +24,9 @@ Phase 2 introduces minimal YAML frontmatter for type-relationship fields only (b
 - Interface notes include a "Known Implementors" section with wikilinks to all implementing classes
 
 ### Wikilink format (Phase 2 scope)
+- **Invariant:** All type wikilinks in Phase 2 use fully-qualified FullName-based targets matching `Sanitize(FullName).md`
 - New class/interface notes use correct `[[ContainingType.MethodName]]` format for member links (matches method note file names)
-- New class/interface notes use `[[Namespace.ClassName]]` format for type relationship links (base class, interfaces) — fully qualified to prevent collisions when duplicate simple names exist across namespaces
+- New class/interface notes use `[[Sanitize(FullName)]]` format for type relationship links (base class, interfaces) — fully qualified to prevent collisions when duplicate simple names exist across namespaces
 - Note file names: class/interface notes use `Sanitize(FullName).md`, method notes use `Sanitize(ContainingType.MethodName).md`
 - Existing method note link rewrites (Calls/Called-by sections) are Phase 3 scope (OUTP-01)
 
