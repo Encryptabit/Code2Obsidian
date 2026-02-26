@@ -11,8 +11,8 @@ See: .planning/PROJECT.md (updated 2026-02-25)
 
 Phase: 1 of 5 (CLI Foundation & Pipeline Architecture)
 Plan: 0 of ? in current phase
-Status: Ready to plan
-Last activity: 2026-02-25 -- Roadmap created
+Status: Context gathered, ready to plan
+Last activity: 2026-02-25 -- Phase 1 context gathered
 
 Progress: [..........] 0%
 
@@ -40,6 +40,7 @@ Progress: [..........] 0%
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- [Context]: Phase 1 success criterion #4 (backward compatibility) dropped — output format unconstrained during refactor
 - [Roadmap]: 5 phases derived from 25 requirements; STRC/OUTP split across Phase 2 (types) and Phase 3 (metrics/output)
 - [Roadmap]: Incremental mode (Phase 4) ordered before LLM enrichment (Phase 5) to prevent wasted API calls on unchanged files
 - [Research]: MEAI (Microsoft.Extensions.AI) chosen for provider-agnostic LLM integration; Anthropic SDK beta risk contained to adapter layer
@@ -55,5 +56,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-25
-Stopped at: Roadmap created, ready to plan Phase 1
-Resume file: None
+Stopped at: Phase 1 context gathered
+Resume file: .planning/phases/01-cli-foundation-pipeline-architecture/01-CONTEXT.md
