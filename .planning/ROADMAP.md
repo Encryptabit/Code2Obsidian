@@ -17,6 +17,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 3: Output Quality & Metrics** - Pattern detection, danger annotations, cyclomatic complexity, Dataview-compatible frontmatter (completed 2026-02-26)
 - [x] **Phase 4: Incremental Mode** - Git-based change detection with selective regeneration for large codebases (completed 2026-02-26)
 - [x] **Phase 5: LLM Enrichment** - Provider-agnostic LLM summaries with caching and cost estimation (completed 2026-02-26)
+- [x] **Phase 5.1: Structured XML Output & Progress Fix** - Structured XML parsing with fallback, jitter-free progress bars (completed 2026-02-26)
 
 ## Phase Details
 
@@ -107,6 +108,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 3. Output Quality & Metrics | 2/2 | Complete | 2026-02-26 |
 | 4. Incremental Mode | 3/3 | Complete | 2026-02-26 |
 | 5. LLM Enrichment | 3/3 | Complete | 2026-02-26 |
+| 5.1 Structured XML Output & Progress Fix | 2/2 | Complete | 2026-02-26 |
 
 ### Phase 05.1: Structured XML Output & Progress Fix (INSERTED)
 
@@ -117,8 +119,8 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
   1. LLM responses are parsed into structured EnrichmentResponse(Summary, Purpose, Tags) with triple-fallback (XML → regex → raw text)
   2. LLM-generated tags appear in Obsidian frontmatter prefixed with `llm/` and sanitized to valid YAML tokens
   3. Progress display remains stable when description text changes length (no column resize jitter)
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 
 Plans:
-- [ ] 05.1-01-PLAN.md -- Structured XML output: EnrichmentResponse record, XML parser, updated cache/enricher/emitter
-- [ ] 05.1-02-PLAN.md -- Progress bar layout fix: AnsiConsole.Live() with fixed-width character bars
+- [x] 05.1-01-PLAN.md -- Structured XML output: EnrichmentResponse record, XML parser, updated cache/enricher/emitter
+- [x] 05.1-02-PLAN.md -- Progress bar layout fix: AnsiConsole.Live() with fixed-width character bars

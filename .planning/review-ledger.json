@@ -180,8 +180,28 @@
       "artifact_hash": "1c027471e849322f89b4a9926d6f45c98078b47a6fdaf57a70eafd16df42b097",
       "note": null,
       "recorded_at": "2026-02-26T19:52:25.135Z"
+    },
+    {
+      "entry_id": "1772144916709-s8v74x",
+      "gate": "plan",
+      "phase": "5.1",
+      "review_id": "a4a843ae-52b4-41eb-96fb-a6e3137cdedf",
+      "status": "approved",
+      "artifact_hash": "463b2e65b3f24ef9eaad08ad3f5bb907d1ea41480cd1b0a8a49024412cf81a1d",
+      "note": null,
+      "recorded_at": "2026-02-26T22:28:36.709Z"
+    },
+    {
+      "entry_id": "1772147195814-yhlpwi",
+      "gate": "execute",
+      "phase": "5.1",
+      "review_id": "8d0aa097-40da-4143-af0c-8338ec9d8a46",
+      "status": "approved",
+      "artifact_hash": "d0aa26bc4d0b35404d96124a390040681f9b052a2fcfe796a35b0df39150a60a",
+      "note": null,
+      "recorded_at": "2026-02-26T23:06:35.814Z"
     }
   ],
   "overrides": [],
-  "updated_at": "2026-02-26T19:52:25.136Z"
+  "updated_at": "2026-02-26T23:06:35.815Z"
 }

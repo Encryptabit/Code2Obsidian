@@ -29,16 +29,18 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### LLM Enrichment
 
-- [ ] **LLM-01**: `--enrich` flag triggers LLM-generated plain-English summaries for methods and classes
+- [ ] **LLM-01**: `--enrich` flag triggers LLM-generated structured summaries (purpose, summary, tags) for methods and classes
 - [ ] **LLM-02**: LLM provider is configurable via JSON config file (Anthropic, OpenAI, Ollama)
 - [ ] **LLM-03**: LLM summaries are cached by source content hash to avoid redundant API calls
 - [ ] **LLM-04**: Tool works fully without any LLM configured (summaries are additive, not required)
 - [ ] **LLM-05**: Cost estimation displayed before LLM enrichment begins on large codebases
+- [x] **LLM-06**: LLM responses parsed as structured XML (summary/purpose/tags) with robust fallback for malformed output
+- [x] **LLM-07**: LLM-generated tags sanitized to valid YAML tokens before frontmatter insertion
 
 ### Infrastructure
 
 - [ ] **INFR-01**: CLI uses System.CommandLine for argument parsing with auto-generated help
-- [ ] **INFR-02**: Progress bars shown during analysis and enrichment of large solutions (Spectre.Console)
+- [x] **INFR-02**: Jitter-free progress display during analysis and enrichment of large solutions (Spectre.Console Live)
 - [ ] **INFR-03**: Incremental mode (`--incremental`) only regenerates notes for files changed since last run
 - [ ] **INFR-04**: Change detection uses git diff against stored commit hash
 - [ ] **INFR-05**: First run without prior state performs full analysis gracefully
@@ -98,16 +100,18 @@ Which phases cover which requirements. Updated during roadmap creation.
 | LLM-03 | Phase 5 | Pending |
 | LLM-04 | Phase 5 | Pending |
 | LLM-05 | Phase 5 | Pending |
+| LLM-06 | Phase 5 | Complete |
+| LLM-07 | Phase 5 | Complete |
 | INFR-01 | Phase 1 | Pending |
-| INFR-02 | Phase 1 | Pending |
+| INFR-02 | Phase 1 | Complete |
 | INFR-03 | Phase 4 | Pending |
 | INFR-04 | Phase 4 | Pending |
 | INFR-05 | Phase 4 | Pending |
 | INFR-06 | Phase 1 | Pending |
 
 **Coverage:**
-- v1 requirements: 25 total
-- Mapped to phases: 25
+- v1 requirements: 27 total
+- Mapped to phases: 27
 - Unmapped: 0
 
 ---
