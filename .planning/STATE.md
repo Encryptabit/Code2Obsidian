@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-25)
 
 **Core value:** A developer can point this tool at any C# solution and get an Obsidian vault that lets them understand what the code does, how it connects, and where the danger zones are -- without reading every file.
-**Current focus:** Phase 5 - LLM Enrichment
+**Current focus:** Phase 05.1 - Structured XML Output & Progress Fix
 
 ## Current Position
 
-Phase: 5 of 5 (LLM Enrichment)
-Plan: 3 of 3 in current phase -- COMPLETE
-Status: Phase 05 COMPLETE -- All phases done
-Last activity: 2026-02-26 -- Completed 05-03 (CLI integration and emitter wiring)
+Phase: 5.1 (Structured XML Output & Progress Fix)
+Plan: 2 of 2 in current phase -- COMPLETE
+Status: Phase 05.1 COMPLETE
+Last activity: 2026-02-26 -- Completed 05.1-02 (Progress Bar Layout Fix)
 
 Progress: [############] 100%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 12
-- Average duration: 7.8 min
-- Total execution time: 1.59 hours
+- Total plans completed: 14
+- Average duration: 7.9 min
+- Total execution time: 1.95 hours
 
 **By Phase:**
 
@@ -32,10 +32,11 @@ Progress: [############] 100%
 | 03 | 2 | 8 min | 4 min |
 | 04 | 3 | 39 min | 13 min |
 | 05 | 3 | 33 min | 11 min |
+| 05.1 | 2 | 22 min | 11 min |
 
 **Recent Trend:**
-- Last 5 plans: 04-03 (13 min), 05-01 (8 min), 05-02 (9 min), 05-03 (16 min)
-- Trend: Final plan larger scope (7 files, CLI+pipeline+emitter) but still under 20 min
+- Last 5 plans: 05-02 (9 min), 05-03 (16 min), 05.1-01 (~11 min), 05.1-02 (11 min)
+- Trend: Consistent ~11 min for moderate scope plans
 
 ## Accumulated Context
 
@@ -89,6 +90,13 @@ Recent decisions affecting current work:
 - [05-03]: LlmEnricher reconstructed per Spectre.Console progress context via BuildEnrichersWithProgress for correct IProgress wiring
 - [05-03]: Cost confirmation Func callback injected from Program.cs to keep LlmEnricher free of Spectre.Console dependency
 - [05-03]: ## Summary section placed after danger callouts (methods) and after source path (types) for prominent placement
+- [05.1-02]: AnsiConsole.Live() replaces Progress() to eliminate jitter from shared TaskDescriptionColumn resizing
+- [05.1-02]: Lock-serialized IProgress callbacks for thread-safe concurrent enrichment updates
+- [05.1-02]: RunFullPipeline delegates to RunWithProgress for single Live display implementation
+
+### Roadmap Evolution
+
+- Phase 05.1 inserted after Phase 5: Structured XML Output & Progress Fix (URGENT)
 
 ### Pending Todos
 
@@ -101,5 +109,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-26
-Stopped at: Completed 05-03-PLAN.md (Phase 05 complete, all phases done)
+Stopped at: Completed 05.1-02-PLAN.md (Phase 05.1 complete)
 Resume file: N/A -- all plans executed
