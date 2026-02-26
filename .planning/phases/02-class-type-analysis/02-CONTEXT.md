@@ -24,8 +24,9 @@ Phase 2 introduces minimal YAML frontmatter for type-relationship fields only (b
 - Interface notes include a "Known Implementors" section with wikilinks to all implementing classes
 
 ### Wikilink format (Phase 2 scope)
-- New class/interface notes use correct `[[ClassName.MethodName]]` format for member links
-- New class/interface notes use `[[ClassName]]` format for type relationship links (base class, interfaces)
+- New class/interface notes use correct `[[ContainingType.MethodName]]` format for member links (matches method note file names)
+- New class/interface notes use `[[Namespace.ClassName]]` format for type relationship links (base class, interfaces) — fully qualified to prevent collisions when duplicate simple names exist across namespaces
+- Note file names: class/interface notes use `Sanitize(FullName).md`, method notes use `Sanitize(ContainingType.MethodName).md`
 - Existing method note link rewrites (Calls/Called-by sections) are Phase 3 scope (OUTP-01)
 
 ### Method signatures (STRC-08)
@@ -37,7 +38,7 @@ Phase 2 introduces minimal YAML frontmatter for type-relationship fields only (b
 - Inheritance and interface information goes in YAML frontmatter (sidebar-style metadata)
 - Phase 2 frontmatter is minimal: base_class, interfaces, namespace, source_file fields only
 - Phase 3 expands frontmatter with metrics, tags, and Dataview-compatible fields
-- Base class and implemented interfaces stored as type names that match note file names
+- Base class and implemented interfaces stored as fully qualified type names that match note file names
 
 ### Member index
 - Members listed in declaration order (same order as source file)
