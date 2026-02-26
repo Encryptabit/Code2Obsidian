@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-02-25)
 ## Current Position
 
 Phase: 4 of 5 (Incremental Mode)
-Plan: 1 of 3 in current phase -- COMPLETE
+Plan: 2 of 3 in current phase -- COMPLETE
 Status: Executing Phase 04
-Last activity: 2026-02-26 -- Completed 04-01 (incremental infrastructure: change detection + SQLite state)
+Last activity: 2026-02-26 -- Completed 04-02 (incremental analysis core: ripple, merge, selective emission)
 
-Progress: [#######...] 70%
+Progress: [########..] 80%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 7
-- Average duration: 6.3 min
-- Total execution time: 0.73 hours
+- Total plans completed: 8
+- Average duration: 6.5 min
+- Total execution time: 0.88 hours
 
 **By Phase:**
 
@@ -30,11 +30,11 @@ Progress: [#######...] 70%
 | 01 | 2 | 11 min | 5.5 min |
 | 02 | 2 | 8 min | 4 min |
 | 03 | 2 | 8 min | 4 min |
-| 04 | 1 | 17 min | 17 min |
+| 04 | 2 | 26 min | 13 min |
 
 **Recent Trend:**
-- Last 5 plans: 02-02 (3 min), 03-01 (4 min), 03-02 (4 min), 04-01 (17 min)
-- Trend: 04-01 longer due to larger scope (6 files, 2 NuGet packages, 600+ line state class)
+- Last 5 plans: 03-01 (4 min), 03-02 (4 min), 04-01 (17 min), 04-02 (9 min)
+- Trend: 04-02 faster than 04-01 (no NuGet packages, lighter implementation)
 
 ## Accumulated Context
 
@@ -70,6 +70,11 @@ Recent decisions affecting current work:
 - [04-01]: LibGit2Sharp Tree+DiffTargets overload does not accept CompareOptions; working dir renames appear as Delete+Add
 - [04-01]: IncrementalState NOT IDisposable -- open-per-operation to avoid Windows file locking
 - [04-01]: Full state replacement per run (DELETE all + INSERT) rather than incremental table updates
+- [04-02]: RippleCalculator uses static methods consuming IncrementalState read API (no instance state)
+- [04-02]: AnalysisResultMerger creates lightweight stubs from stored indexes for collision detection only
+- [04-02]: Implementor merging passes through fresh result only -- type_references cannot reconstruct interface implementations
+- [04-02]: File filter and dirty-files use optional constructor parameters with null defaults for backward compatibility
+- [04-02]: EmitResult extended with EmittedNotes tuple list for state storage tracking
 
 ### Pending Todos
 
@@ -82,5 +87,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-26
-Stopped at: Completed 04-01-PLAN.md
-Resume file: 04-02-PLAN.md
+Stopped at: Completed 04-02-PLAN.md
+Resume file: 04-03-PLAN.md
