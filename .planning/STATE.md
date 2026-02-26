@@ -91,5 +91,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-26
-Stopped at: Completed 04-03-PLAN.md (Phase 04 complete)
-Resume file: Phase 05 planning
+Stopped at: Phase 5 context gathered
+Resume file: .planning/phases/05-llm-enrichment/05-CONTEXT.md
