@@ -79,7 +79,9 @@ public sealed class ObsidianEmitter : IEmitter
 
             try
             {
-                var content = RenderMethodNote(method, analysis, collisionSet, overloadIndex);
+                // Look up LLM-generated summary (null if no enrichment or not found)
+                result.MethodSummaries.TryGetValue(methodId.Value, out var methodSummary);
+                var content = RenderMethodNote(method, analysis, collisionSet, overloadIndex, methodSummary);
                 await File.WriteAllTextAsync(filePath, content, ct);
                 notesWritten++;
                 emittedNotes.Add((filePath, method.FilePath, methodId.Value));
@@ -108,9 +110,11 @@ public sealed class ObsidianEmitter : IEmitter
 
             try
             {
+                // Look up LLM-generated summary (null if no enrichment or not found)
+                result.TypeSummaries.TryGetValue(typeId.Value, out var typeSummary);
                 var content = typeInfo.Kind == TypeKindInfo.Interface
-                    ? RenderInterfaceNote(typeInfo, analysis, collisionSet, overloadIndex)
-                    : RenderClassNote(typeInfo, analysis, collisionSet, overloadIndex);
+                    ? RenderInterfaceNote(typeInfo, analysis, collisionSet, overloadIndex, typeSummary)
+                    : RenderClassNote(typeInfo, analysis, collisionSet, overloadIndex, typeSummary);
                 await File.WriteAllTextAsync(filePath, content, ct);
                 notesWritten++;
                 emittedNotes.Add((filePath, typeInfo.FilePath, typeId.Value));
@@ -263,7 +267,7 @@ public sealed class ObsidianEmitter : IEmitter
     /// Renders a complete markdown note for a single method with expanded YAML frontmatter,
     /// danger callouts for high-risk methods, header, signature, doc comment, and call graph links.
     /// </summary>
-    private string RenderMethodNote(MethodInfo method, AnalysisResult analysis, HashSet<string> collisionSet, Dictionary<MethodId, string?> overloadIndex)
+    private string RenderMethodNote(MethodInfo method, AnalysisResult analysis, HashSet<string> collisionSet, Dictionary<MethodId, string?> overloadIndex, string? summary = null)
     {
         var sb = new StringBuilder();
         var callGraph = analysis.CallGraph;
@@ -307,6 +311,14 @@ public sealed class ObsidianEmitter : IEmitter
         {
             sb.AppendLine($"> [!danger] High Complexity ({method.CyclomaticComplexity})");
             sb.AppendLine($"> Cyclomatic complexity: {method.CyclomaticComplexity}. Consider refactoring into smaller methods.");
+            sb.AppendLine();
+        }
+
+        // LLM-generated summary (only when enrichment provides one)
+        if (!string.IsNullOrWhiteSpace(summary))
+        {
+            sb.AppendLine("## Summary");
+            sb.AppendLine(summary);
             sb.AppendLine();
         }
 
@@ -431,7 +443,7 @@ public sealed class ObsidianEmitter : IEmitter
     /// Includes expanded YAML frontmatter with pattern detection, purpose summary,
     /// inheritance wikilinks, DI dependencies, properties/fields, and member index.
     /// </summary>
-    private static string RenderClassNote(TypeInfo typeInfo, AnalysisResult analysis, HashSet<string> collisionSet, Dictionary<MethodId, string?> overloadIndex)
+    private static string RenderClassNote(TypeInfo typeInfo, AnalysisResult analysis, HashSet<string> collisionSet, Dictionary<MethodId, string?> overloadIndex, string? summary = null)
     {
         var sb = new StringBuilder();
 
@@ -499,6 +511,14 @@ public sealed class ObsidianEmitter : IEmitter
         // Source path
         sb.AppendLine($"**Path**: `{NormalizePath(typeInfo.FilePath)}`");
         sb.AppendLine();
+
+        // LLM-generated summary (only when enrichment provides one)
+        if (!string.IsNullOrWhiteSpace(summary))
+        {
+            sb.AppendLine("## Summary");
+            sb.AppendLine(summary);
+            sb.AppendLine();
+        }
 
         // Type relationships
         if (typeInfo.BaseClassFullName is not null)
@@ -591,7 +611,7 @@ public sealed class ObsidianEmitter : IEmitter
     /// Same structure as class notes, but includes "Known Implementors" section
     /// and sets dependency_count to 0 (interfaces have no constructors with DI).
     /// </summary>
-    private static string RenderInterfaceNote(TypeInfo typeInfo, AnalysisResult analysis, HashSet<string> collisionSet, Dictionary<MethodId, string?> overloadIndex)
+    private static string RenderInterfaceNote(TypeInfo typeInfo, AnalysisResult analysis, HashSet<string> collisionSet, Dictionary<MethodId, string?> overloadIndex, string? summary = null)
     {
         var sb = new StringBuilder();
 
@@ -650,6 +670,14 @@ public sealed class ObsidianEmitter : IEmitter
         // Source path
         sb.AppendLine($"**Path**: `{NormalizePath(typeInfo.FilePath)}`");
         sb.AppendLine();
+
+        // LLM-generated summary (only when enrichment provides one)
+        if (!string.IsNullOrWhiteSpace(summary))
+        {
+            sb.AppendLine("## Summary");
+            sb.AppendLine(summary);
+            sb.AppendLine();
+        }
 
         // Type relationships (interfaces can extend other interfaces)
         if (typeInfo.InterfaceFullNames.Count > 0)
