@@ -71,7 +71,11 @@ Plans:
   1. Running with `--incremental` after modifying one file in a 200-file solution regenerates only the notes affected by that change
   2. The tool stores and compares git commit hashes to determine which files changed since the last run
   3. First run on a repo with no prior state performs full analysis without errors or special setup
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+- [ ] 04-01-PLAN.md -- Foundation: NuGet packages, ChangeSet model, IChangeDetector with git/hash implementations, SQLite state storage
+- [ ] 04-02-PLAN.md -- Core: RippleCalculator, StaleNoteDetector, AnalysisResultMerger, file filter in analyzers, selective emission
+- [ ] 04-03-PLAN.md -- Integration: CLI flags, incremental orchestration in Program.cs, two-pass analysis, state save, progress display
 
 ### Phase 5: LLM Enrichment
 **Goal**: Developers can opt into LLM-generated plain-English summaries that explain what methods and classes do, with provider flexibility and cost controls
@@ -95,5 +99,5 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 1. CLI Foundation & Pipeline Architecture | 2/2 | Complete | 2026-02-26 |
 | 2. Class & Type Analysis | 2/2 | Complete | 2026-02-26 |
 | 3. Output Quality & Metrics | 0/2 | In progress | - |
-| 4. Incremental Mode | 0/? | Not started | - |
+| 4. Incremental Mode | 0/3 | Not started | - |
 | 5. LLM Enrichment | 0/? | Not started | - |
