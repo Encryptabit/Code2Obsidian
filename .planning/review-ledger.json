@@ -90,8 +90,18 @@
       "artifact_hash": null,
       "note": null,
       "recorded_at": "2026-02-26T07:05:29.023Z"
+    },
+    {
+      "entry_id": "1772090076631-sjq7l1",
+      "gate": "plan",
+      "phase": "3",
+      "review_id": "6e91b4dd-bcff-4c02-9f61-c3e7e595871e",
+      "status": "approved",
+      "artifact_hash": "722456f332fdbec44dcbf39bb4bbfa4f66806986f10f6dc50dc429682bcfeea2",
+      "note": null,
+      "recorded_at": "2026-02-26T07:14:36.631Z"
     }
   ],
   "overrides": [],
-  "updated_at": "2026-02-26T07:05:29.024Z"
+  "updated_at": "2026-02-26T07:14:36.632Z"
 }
