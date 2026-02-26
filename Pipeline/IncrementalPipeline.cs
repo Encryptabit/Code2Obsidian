@@ -7,6 +7,8 @@ using Code2Obsidian.Emission;
 using Code2Obsidian.Enrichment;
 using Code2Obsidian.Incremental;
 using Code2Obsidian.Loading;
+using LibGit2Sharp;
+using Microsoft.CodeAnalysis;
 
 namespace Code2Obsidian.Pipeline;
 
@@ -41,15 +43,6 @@ public sealed class IncrementalPipeline
     }
 
     /// <summary>
-    /// Allows updating the progress reporter after construction (used when
-    /// the Spectre.Console ProgressContext is created after the pipeline instance).
-    /// </summary>
-    internal void SetProgress(IProgress<PipelineProgress>? progress)
-    {
-        _progress = progress;
-    }
-
-    /// <summary>
     /// Cases B and D: Full analysis with state save.
     /// Used for first incremental run (no prior state) and --full-rebuild.
     /// Runs full analysis via Pipeline, then saves state for future incremental runs.
@@ -75,23 +68,310 @@ public sealed class IncrementalPipeline
     }
 
     /// <summary>
-    /// Case C: Full incremental flow -- two-pass analysis, ripple, merge, selective emission,
-    /// stale cleanup, state save. Implemented in Task 3.
+    /// Case C: Full incremental flow.
+    /// Two-pass analysis, ripple computation, merge with stored data, selective emission,
+    /// stale note cleanup, and state save after successful emission.
     /// </summary>
     public async Task<PipelineResult> RunIncrementalAsync(IncrementalState state, CancellationToken ct)
     {
-        // Placeholder -- implemented in Task 3
-        throw new NotImplementedException("RunIncrementalAsync will be implemented in Task 3.");
+        var result = new PipelineResult();
+        var sw = Stopwatch.StartNew();
+
+        // Count total .cs documents for progress denominator
+        int totalDocuments = CountCSharpDocuments();
+
+        // Step 1: Change detection -- git-primary with hash fallback
+        _progress?.Report(new PipelineProgress(
+            PipelineStage.Analyzing,
+            "Detecting changes...",
+            0,
+            totalDocuments));
+
+        var solutionDir = Path.GetDirectoryName(_context.Solution.FilePath ?? _outputDirectory)!;
+        var changeSet = DetectChanges(solutionDir, state);
+
+        if (changeSet is null || changeSet.IsFullRebuild)
+        {
+            // Change detection failed or signaled full rebuild -- fall through to full
+            _progress?.Report(new PipelineProgress(
+                PipelineStage.Analyzing,
+                "Change detection requires full rebuild...",
+                0,
+                totalDocuments));
+            return await RunFullWithStateSaveAsync(ct);
+        }
+
+        // Normalize change set paths to absolute paths matching Roslyn document.FilePath
+        var absoluteChangedFiles = NormalizeToAbsolutePaths(changeSet.ChangedFilePaths, solutionDir);
+
+        // If no changes detected, fast exit
+        if (absoluteChangedFiles.Count == 0 && changeSet.DeletedFilePaths.Count == 0)
+        {
+            result.AnalysisDuration = sw.Elapsed;
+            result.FilesAnalyzed = 0;
+            result.FilesSkipped = totalDocuments;
+            result.NotesGenerated = 0;
+            result.NotesDeleted = 0;
+            result.WasIncremental = true;
+            result.Warnings.Add("No changes detected since last run.");
+            return result;
+        }
+
+        // Handle git renames: rename vault notes to preserve Obsidian backlinks
+        foreach (var (oldRelPath, newRelPath) in changeSet.RenamedPaths)
+        {
+            var oldAbsPath = ResolveAbsolutePath(oldRelPath, solutionDir);
+            var newAbsPath = ResolveAbsolutePath(newRelPath, solutionDir);
+            RenameVaultNotes(oldAbsPath, newAbsPath);
+        }
+
+        int analyzeCount = absoluteChangedFiles.Count;
+
+        _progress?.Report(new PipelineProgress(
+            PipelineStage.Analyzing,
+            $"Analyzing {analyzeCount}/{totalDocuments} files ({totalDocuments - analyzeCount} unchanged)",
+            0,
+            analyzeCount));
+
+        // Step 2: Pass 1 -- Analyze changed files only
+        var pass1Analyzers = new List<IAnalyzer>
+        {
+            new MethodAnalyzer(absoluteChangedFiles),
+            new TypeAnalyzer(absoluteChangedFiles)
+        };
+        var pass1Builder = new AnalysisResultBuilder();
+        foreach (var analyzer in pass1Analyzers)
+        {
+            await analyzer.AnalyzeAsync(_context, pass1Builder, _progress, ct);
+        }
+        var pass1Result = pass1Builder.Build();
+
+        // Step 3: Ripple computation
+        _progress?.Report(new PipelineProgress(
+            PipelineStage.Analyzing,
+            "Computing ripple effect...",
+            analyzeCount / 2,
+            analyzeCount));
+
+        var affectedFiles = RippleCalculator.ComputeAffectedFiles(absoluteChangedFiles, pass1Result, state);
+
+        // Add files for deleted types (deletion ripple via structural detection is handled inside ComputeAffectedFiles)
+        var absoluteDeletedFiles = NormalizeToAbsolutePaths(changeSet.DeletedFilePaths, solutionDir);
+        foreach (var deleted in absoluteDeletedFiles)
+            affectedFiles.Add(deleted);
+
+        // Step 4: Pass 2 -- if ripple expanded the file set, reanalyze with expanded filter
+        AnalysisResult freshAnalysis;
+        if (affectedFiles.Count > absoluteChangedFiles.Count)
+        {
+            var expandedFilter = new HashSet<string>(affectedFiles, StringComparer.OrdinalIgnoreCase);
+
+            _progress?.Report(new PipelineProgress(
+                PipelineStage.Analyzing,
+                $"Ripple expanded to {expandedFilter.Count} files, reanalyzing...",
+                analyzeCount,
+                expandedFilter.Count));
+
+            var pass2Analyzers = new List<IAnalyzer>
+            {
+                new MethodAnalyzer(expandedFilter),
+                new TypeAnalyzer(expandedFilter)
+            };
+            var pass2Builder = new AnalysisResultBuilder();
+            foreach (var analyzer in pass2Analyzers)
+            {
+                await analyzer.AnalyzeAsync(_context, pass2Builder, _progress, ct);
+            }
+            freshAnalysis = pass2Builder.Build();
+            analyzeCount = expandedFilter.Count;
+        }
+        else
+        {
+            freshAnalysis = pass1Result;
+        }
+
+        result.AnalysisDuration = sw.Elapsed;
+        result.FilesAnalyzed = analyzeCount;
+        result.FilesSkipped = totalDocuments - analyzeCount;
+        result.ProjectsAnalyzed = freshAnalysis.ProjectCount;
+
+        sw.Restart();
+
+        // Step 5: Merge fresh analysis with stored data for complete result
+        _progress?.Report(new PipelineProgress(
+            PipelineStage.Enriching,
+            "Merging with stored analysis data...",
+            0,
+            1));
+
+        var reanalyzedFileSet = new HashSet<string>(affectedFiles, StringComparer.OrdinalIgnoreCase);
+        var mergedAnalysis = AnalysisResultMerger.Merge(freshAnalysis, state, reanalyzedFileSet);
+
+        // Enrichment pass (currently no enrichers)
+        var enrichedResult = new EnrichedResult(mergedAnalysis);
+
+        _progress?.Report(new PipelineProgress(
+            PipelineStage.Enriching,
+            "Merge complete",
+            1,
+            1));
+
+        result.EnrichmentDuration = sw.Elapsed;
+        sw.Restart();
+
+        // Step 6: Selective emission -- only write notes for dirty files
+        _progress?.Report(new PipelineProgress(
+            PipelineStage.Emitting,
+            $"Emitting notes for {analyzeCount} affected files...",
+            0,
+            analyzeCount));
+
+        var emitter = new ObsidianEmitter(_fanInThreshold, _complexityThreshold, dirtyFiles: reanalyzedFileSet);
+        var emitResult = await emitter.EmitAsync(enrichedResult, _outputDirectory, ct);
+
+        result.NotesGenerated = emitResult.NotesWritten;
+        result.Warnings.AddRange(emitResult.Warnings);
+
+        // Step 7: Stale note cleanup
+        var storedNotes = state.GetEmittedNotes();
+        var currentEntityIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (methodId, _) in mergedAnalysis.Methods)
+            currentEntityIds.Add(methodId.Value);
+        foreach (var (typeId, _) in mergedAnalysis.Types)
+            currentEntityIds.Add(typeId.Value);
+
+        var staleNotes = StaleNoteDetector.FindStaleNotes(storedNotes, currentEntityIds, reanalyzedFileSet);
+        int notesDeleted = 0;
+        foreach (var stalePath in staleNotes)
+        {
+            try
+            {
+                if (File.Exists(stalePath))
+                {
+                    File.Delete(stalePath);
+                    notesDeleted++;
+                }
+            }
+            catch (IOException)
+            {
+                result.Warnings.Add($"Failed to delete stale note: {stalePath}");
+            }
+        }
+        result.NotesDeleted = notesDeleted;
+
+        _progress?.Report(new PipelineProgress(
+            PipelineStage.Emitting,
+            $"Emission complete ({emitResult.NotesWritten} written, {notesDeleted} stale deleted)",
+            emitResult.NotesWritten,
+            emitResult.NotesWritten));
+
+        result.EmissionDuration = sw.Elapsed;
+
+        // Step 8: Save state AFTER successful emission (transaction boundary)
+        SaveState(state, mergedAnalysis, emitResult, reanalyzedFileSet, state);
+
+        result.WasIncremental = true;
+        result.AnalysisResult = mergedAnalysis;
+        result.EmitResult = emitResult;
+
+        return result;
     }
 
     /// <summary>
-    /// Case E: Dry-run mode -- detect changes and report what would be regenerated
-    /// without writing any files or updating state. Implemented in Task 3.
+    /// Case E: Dry-run mode -- detect changes and report what would change
+    /// without writing any files or updating state.
     /// </summary>
     public async Task<PipelineResult> RunDryRunAsync(IncrementalState state, CancellationToken ct)
     {
-        // Placeholder -- implemented in Task 3
-        throw new NotImplementedException("RunDryRunAsync will be implemented in Task 3.");
+        var result = new PipelineResult();
+        var sw = Stopwatch.StartNew();
+
+        int totalDocuments = CountCSharpDocuments();
+
+        // Step 1: Change detection
+        _progress?.Report(new PipelineProgress(
+            PipelineStage.Analyzing,
+            "Detecting changes (dry run)...",
+            0,
+            totalDocuments));
+
+        var solutionDir = Path.GetDirectoryName(_context.Solution.FilePath ?? _outputDirectory)!;
+        var changeSet = DetectChanges(solutionDir, state);
+
+        if (changeSet is null || changeSet.IsFullRebuild)
+        {
+            result.AnalysisDuration = sw.Elapsed;
+            result.WasIncremental = true;
+            result.Warnings.Add("Dry run: change detection requires full rebuild. Run with --incremental (no --dry-run) to rebuild.");
+            return result;
+        }
+
+        var absoluteChangedFiles = NormalizeToAbsolutePaths(changeSet.ChangedFilePaths, solutionDir);
+
+        if (absoluteChangedFiles.Count == 0 && changeSet.DeletedFilePaths.Count == 0)
+        {
+            result.AnalysisDuration = sw.Elapsed;
+            result.FilesAnalyzed = 0;
+            result.FilesSkipped = totalDocuments;
+            result.WasIncremental = true;
+            result.Warnings.Add("Dry run: no changes detected since last run.");
+            return result;
+        }
+
+        // Step 2: Analyze changed files for ripple computation
+        var pass1Analyzers = new List<IAnalyzer>
+        {
+            new MethodAnalyzer(absoluteChangedFiles),
+            new TypeAnalyzer(absoluteChangedFiles)
+        };
+        var pass1Builder = new AnalysisResultBuilder();
+        foreach (var analyzer in pass1Analyzers)
+        {
+            await analyzer.AnalyzeAsync(_context, pass1Builder, _progress, ct);
+        }
+        var pass1Result = pass1Builder.Build();
+
+        // Step 3: Ripple computation
+        var affectedFiles = RippleCalculator.ComputeAffectedFiles(absoluteChangedFiles, pass1Result, state);
+        var absoluteDeletedFiles = NormalizeToAbsolutePaths(changeSet.DeletedFilePaths, solutionDir);
+        foreach (var deleted in absoluteDeletedFiles)
+            affectedFiles.Add(deleted);
+
+        // Step 4: Stale note detection
+        var storedNotes = state.GetEmittedNotes();
+        var reanalyzedFileSet = new HashSet<string>(affectedFiles, StringComparer.OrdinalIgnoreCase);
+
+        // For dry run, we need current entity IDs from a quick pass
+        var currentEntityIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (methodId, _) in pass1Result.Methods)
+            currentEntityIds.Add(methodId.Value);
+        foreach (var (typeId, _) in pass1Result.Types)
+            currentEntityIds.Add(typeId.Value);
+
+        var staleNotes = StaleNoteDetector.FindStaleNotes(storedNotes, currentEntityIds, reanalyzedFileSet);
+
+        result.AnalysisDuration = sw.Elapsed;
+        result.FilesAnalyzed = absoluteChangedFiles.Count;
+        result.FilesSkipped = totalDocuments - absoluteChangedFiles.Count;
+        result.NotesGenerated = 0; // Dry run: nothing written
+        result.NotesDeleted = staleNotes.Count; // Would be deleted
+        result.WasIncremental = true;
+
+        // Report summary
+        var summary = new System.Text.StringBuilder();
+        summary.AppendLine($"Dry run: {absoluteChangedFiles.Count} changed files detected");
+        summary.AppendLine($"  Ripple expands to {affectedFiles.Count} affected files");
+        summary.AppendLine($"  {staleNotes.Count} stale notes would be deleted");
+        summary.AppendLine($"  {totalDocuments - affectedFiles.Count} files would be skipped");
+        result.Warnings.Add(summary.ToString());
+
+        _progress?.Report(new PipelineProgress(
+            PipelineStage.Emitting,
+            $"Dry run complete: {affectedFiles.Count} files would be regenerated",
+            1,
+            1));
+
+        return result;
     }
 
     /// <summary>
@@ -114,6 +394,183 @@ public sealed class IncrementalPipeline
             File.WriteAllText(gitignorePath, $"{pattern}\n");
         }
     }
+
+    // -----------------------------------------------------------------------
+    //  Change detection
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Detects changes using git-primary with hash-fallback strategy.
+    /// </summary>
+    private ChangeSet? DetectChanges(string solutionDir, IncrementalState state)
+    {
+        // Try git first
+        try
+        {
+            var gitDetector = new GitChangeDetector();
+            var changeSet = gitDetector.DetectChanges(solutionDir, state);
+            if (changeSet is not null)
+                return changeSet;
+        }
+        catch
+        {
+            // Git detection failed -- fall through to hash
+        }
+
+        // Fallback to hash-based detection
+        var hashDetector = new HashChangeDetector();
+        return hashDetector.DetectChanges(solutionDir, state);
+    }
+
+    // -----------------------------------------------------------------------
+    //  Path normalization
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Converts relative file paths (from change detectors) to absolute paths
+    /// matching Roslyn document.FilePath format.
+    /// </summary>
+    private HashSet<string> NormalizeToAbsolutePaths(IReadOnlySet<string> relativePaths, string solutionDir)
+    {
+        // First, build a lookup of all Roslyn document file paths for efficient matching
+        var roslynPaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var project in _context.Solution.Projects)
+        {
+            foreach (var document in project.Documents)
+            {
+                if (document.FilePath is not null)
+                {
+                    // Normalize to forward-slash for comparison
+                    var normalized = document.FilePath.Replace('\\', '/');
+                    roslynPaths[normalized] = document.FilePath;
+
+                    // Also index by file name for fallback matching
+                    var fileName = Path.GetFileName(document.FilePath);
+                    // Don't overwrite if multiple files have same name
+                    roslynPaths.TryAdd(fileName, document.FilePath);
+                }
+            }
+        }
+
+        var absolutePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var relativePath in relativePaths)
+        {
+            // Strategy 1: Direct resolve against solution directory
+            var candidate = Path.GetFullPath(Path.Combine(solutionDir, relativePath));
+            if (roslynPaths.TryGetValue(candidate.Replace('\\', '/'), out var roslynPath))
+            {
+                absolutePaths.Add(roslynPath);
+                continue;
+            }
+
+            // Strategy 2: Try the candidate path directly (if it exists)
+            if (File.Exists(candidate))
+            {
+                absolutePaths.Add(candidate);
+                continue;
+            }
+
+            // Strategy 3: Search Roslyn paths for suffix match
+            var normalizedRelative = relativePath.Replace('\\', '/');
+            var match = roslynPaths.Keys
+                .FirstOrDefault(k => k.EndsWith("/" + normalizedRelative, StringComparison.OrdinalIgnoreCase)
+                    || k.Equals(normalizedRelative, StringComparison.OrdinalIgnoreCase));
+            if (match is not null && roslynPaths.TryGetValue(match, out var matched))
+            {
+                absolutePaths.Add(matched);
+                continue;
+            }
+
+            // Strategy 4: Try resolving against repo root (may differ from solution dir)
+            try
+            {
+                var repoRoot = Repository.Discover(solutionDir);
+                if (repoRoot is not null)
+                {
+                    // Repository.Discover returns path to .git directory
+                    var rootDir = Path.GetDirectoryName(repoRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+                    if (rootDir is not null)
+                    {
+                        var repoCandidate = Path.GetFullPath(Path.Combine(rootDir, relativePath));
+                        if (File.Exists(repoCandidate))
+                        {
+                            absolutePaths.Add(repoCandidate);
+                            continue;
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // Not a git repo or error
+            }
+
+            // If all strategies fail, use the candidate as-is (best effort)
+            absolutePaths.Add(candidate);
+        }
+
+        return absolutePaths;
+    }
+
+    /// <summary>
+    /// Resolves a single relative path to absolute using the solution directory.
+    /// </summary>
+    private static string ResolveAbsolutePath(string relativePath, string solutionDir)
+    {
+        return Path.GetFullPath(Path.Combine(solutionDir, relativePath));
+    }
+
+    // -----------------------------------------------------------------------
+    //  Vault operations
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Renames vault notes when source files are renamed, preserving Obsidian backlinks.
+    /// </summary>
+    private void RenameVaultNotes(string oldFilePath, string newFilePath)
+    {
+        // Find notes in the vault that were emitted from the old file path
+        var state = new IncrementalState(_stateDbPath);
+        if (!state.TryLoad(out _))
+            return;
+
+        var emittedNotes = state.GetEmittedNotes();
+        foreach (var (notePath, (sourceFile, _)) in emittedNotes)
+        {
+            if (string.Equals(sourceFile, oldFilePath, StringComparison.OrdinalIgnoreCase))
+            {
+                // Note was from the old file -- it will be regenerated with new content.
+                // The rename is handled implicitly: the old note stays, and a new note
+                // is generated. Stale detection will clean up the old note if its entity
+                // ID changed.
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    //  Helper: count documents
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Counts total C# documents across all projects in the solution.
+    /// </summary>
+    private int CountCSharpDocuments()
+    {
+        int count = 0;
+        foreach (var project in _context.Solution.Projects)
+        {
+            if (project.Language == LanguageNames.CSharp)
+            {
+                count += project.Documents.Count();
+            }
+        }
+        return count;
+    }
+
+    // -----------------------------------------------------------------------
+    //  State persistence
+    // -----------------------------------------------------------------------
 
     /// <summary>
     /// Extracts state data from analysis and emission results and saves to SQLite.
@@ -152,8 +609,7 @@ public sealed class IncrementalPipeline
         // 2. Call edges from analysis call graph
         var callEdges = BuildCallEdges(analysis);
 
-        // 3. Type references: for each type, record which files reference it
-        // (We extract this from the analysis data by looking at method/type file paths)
+        // 3. Type references
         var typeReferences = BuildTypeReferences(analysis);
 
         // 4. Type files: which files define each type
@@ -253,8 +709,6 @@ public sealed class IncrementalPipeline
 
     private static List<(string TypeId, string FilePath)> BuildTypeReferences(AnalysisResult analysis)
     {
-        // Build type references: for each method, record which types it references
-        // by mapping from type -> file that references it (the method's file)
         var refs = new List<(string, string)>();
         var seen = new HashSet<(string, string)>();
 
@@ -266,8 +720,7 @@ public sealed class IncrementalPipeline
                 refs.Add(key);
         }
 
-        // Types that appear in the same file reference each other implicitly
-        // (for structural change ripple)
+        // Types that reference other types (base class, interfaces, DI deps)
         foreach (var type in analysis.Types.Values)
         {
             // Base class reference

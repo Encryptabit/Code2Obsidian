@@ -108,12 +108,9 @@ internal static class Program
 
             if (incremental || fullRebuild || dryRun)
             {
-                // Incremental mode: delegate to IncrementalPipeline
+                // Incremental mode: delegate ALL orchestration to IncrementalPipeline (INFR-06)
                 var stateDbPath = Path.Combine(outputDir, ".code2obsidian-state.db");
                 var state = new IncrementalState(stateDbPath);
-
-                // IncrementalPipeline is created per-case with the correct progress reporter.
-                // The Spectre.Console ProgressContext is created inside RunWithProgress.
 
                 if (fullRebuild)
                 {
@@ -131,7 +128,12 @@ internal static class Program
                 }
                 else if (dryRun)
                 {
-                    // Case E: --dry-run -> show what would change
+                    // Case E: --dry-run -> show what would change without writing
+                    if (!incremental)
+                    {
+                        AnsiConsole.MarkupLine("[yellow]--dry-run without --incremental: showing full analysis preview.[/]");
+                    }
+
                     if (!state.TryLoad(out _))
                     {
                         AnsiConsole.MarkupLine("[yellow]No prior state found. Dry run requires a previous incremental run.[/]");
@@ -153,7 +155,7 @@ internal static class Program
                     // --incremental flag
                     if (!state.TryLoad(out _))
                     {
-                        // Case B: no prior state -> full analysis with state save
+                        // Case B: no prior state -> full analysis with state save (INFR-05)
                         AnsiConsole.MarkupLine("[yellow]No prior state found. Performing full analysis and saving state.[/]");
                         result = await RunWithProgress(ctx =>
                         {
@@ -166,7 +168,7 @@ internal static class Program
                     }
                     else
                     {
-                        // Case C: prior state exists -> run incremental
+                        // Case C: prior state exists -> run incremental two-pass flow (INFR-03)
                         result = await RunWithProgress(ctx =>
                         {
                             var progress = CreateProgress(ctx);
