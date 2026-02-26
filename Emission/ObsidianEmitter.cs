@@ -17,6 +17,7 @@ public sealed class ObsidianEmitter : IEmitter
 {
     private readonly int _fanInThreshold;
     private readonly int _complexityThreshold;
+    private readonly IReadOnlySet<string>? _dirtyFiles;
 
     /// <summary>
     /// Pattern suffix table for architectural pattern detection.
@@ -31,10 +32,19 @@ public sealed class ObsidianEmitter : IEmitter
         ("Handler", "handler"),
     };
 
-    public ObsidianEmitter(int fanInThreshold = 10, int complexityThreshold = 15)
+    /// <summary>
+    /// Creates an ObsidianEmitter.
+    /// </summary>
+    /// <param name="fanInThreshold">Fan-in threshold for danger callouts.</param>
+    /// <param name="complexityThreshold">Complexity threshold for danger callouts.</param>
+    /// <param name="dirtyFiles">When non-null, only emit notes for entities whose FilePath
+    /// is in this set (incremental mode). When null, emit all notes (full mode).
+    /// The set should use StringComparer.OrdinalIgnoreCase.</param>
+    public ObsidianEmitter(int fanInThreshold = 10, int complexityThreshold = 15, IReadOnlySet<string>? dirtyFiles = null)
     {
         _fanInThreshold = fanInThreshold;
         _complexityThreshold = complexityThreshold;
+        _dirtyFiles = dirtyFiles;
     }
 
     public async Task<EmitResult> EmitAsync(
@@ -44,11 +54,13 @@ public sealed class ObsidianEmitter : IEmitter
     {
         var analysis = result.Analysis;
         var warnings = new List<string>();
+        var emittedNotes = new List<(string NotePath, string SourceFile, string EntityId)>();
         int notesWritten = 0;
 
         Directory.CreateDirectory(outputDirectory);
 
         // Build collision set and overload index for disambiguation
+        // CRITICAL: These operate on the FULL AnalysisResult, not just dirty files.
         var collisionSet = BuildCollisionSet(analysis);
         var overloadIndex = BuildOverloadIndex(analysis);
 
@@ -56,6 +68,10 @@ public sealed class ObsidianEmitter : IEmitter
         foreach (var (methodId, method) in analysis.Methods)
         {
             ct.ThrowIfCancellationRequested();
+
+            // In incremental mode, only write notes for methods in dirty files
+            if (_dirtyFiles is not null && !_dirtyFiles.Contains(method.FilePath))
+                continue;
 
             var noteBaseName = ResolveMethodNoteName(method, collisionSet, overloadIndex);
             var fileName = Sanitize($"{noteBaseName}.md");
@@ -66,6 +82,7 @@ public sealed class ObsidianEmitter : IEmitter
                 var content = RenderMethodNote(method, analysis, collisionSet, overloadIndex);
                 await File.WriteAllTextAsync(filePath, content, ct);
                 notesWritten++;
+                emittedNotes.Add((filePath, method.FilePath, methodId.Value));
             }
             catch (IOException ex)
             {
@@ -77,6 +94,10 @@ public sealed class ObsidianEmitter : IEmitter
         foreach (var (typeId, typeInfo) in analysis.Types)
         {
             ct.ThrowIfCancellationRequested();
+
+            // In incremental mode, only write notes for types in dirty files
+            if (_dirtyFiles is not null && !_dirtyFiles.Contains(typeInfo.FilePath))
+                continue;
 
             var shortClassName = GetShortClassName(typeInfo.FullName);
             var noteBaseName = IsCollision(shortClassName, collisionSet)
@@ -92,6 +113,7 @@ public sealed class ObsidianEmitter : IEmitter
                     : RenderClassNote(typeInfo, analysis, collisionSet, overloadIndex);
                 await File.WriteAllTextAsync(filePath, content, ct);
                 notesWritten++;
+                emittedNotes.Add((filePath, typeInfo.FilePath, typeId.Value));
             }
             catch (IOException ex)
             {
@@ -99,7 +121,7 @@ public sealed class ObsidianEmitter : IEmitter
             }
         }
 
-        return new EmitResult(notesWritten, warnings);
+        return new EmitResult(notesWritten, warnings, emittedNotes);
     }
 
     /// <summary>

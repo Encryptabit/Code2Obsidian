@@ -18,7 +18,26 @@ namespace Code2Obsidian.Analysis.Analyzers;
 /// </summary>
 public sealed class MethodAnalyzer : IAnalyzer
 {
+    private readonly IReadOnlySet<string>? _fileFilter;
+
     public string Name => "MethodAnalyzer";
+
+    /// <summary>
+    /// Creates a MethodAnalyzer that analyzes all documents (full analysis mode).
+    /// </summary>
+    public MethodAnalyzer() : this(null)
+    {
+    }
+
+    /// <summary>
+    /// Creates a MethodAnalyzer with an optional file filter for incremental mode.
+    /// When fileFilter is non-null, only documents whose FilePath is in the filter are analyzed.
+    /// The filter should use StringComparer.OrdinalIgnoreCase for case-insensitive path matching.
+    /// </summary>
+    public MethodAnalyzer(IReadOnlySet<string>? fileFilter)
+    {
+        _fileFilter = fileFilter;
+    }
 
     public async Task AnalyzeAsync(AnalysisContext context, AnalysisResultBuilder builder, IProgress<PipelineProgress>? progress, CancellationToken ct)
     {
@@ -54,6 +73,10 @@ public sealed class MethodAnalyzer : IAnalyzer
 
                 // Skip non-source docs
                 if (string.IsNullOrWhiteSpace(document.FilePath)) continue;
+
+                // Skip unchanged files in incremental mode
+                if (_fileFilter is not null && !_fileFilter.Contains(document.FilePath!))
+                    continue;
 
                 var tree = await document.GetSyntaxTreeAsync(ct);
                 if (tree is null) continue;

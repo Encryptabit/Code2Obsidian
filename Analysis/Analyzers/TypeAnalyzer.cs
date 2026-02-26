@@ -14,7 +14,26 @@ namespace Code2Obsidian.Analysis.Analyzers;
 /// </summary>
 public sealed class TypeAnalyzer : IAnalyzer
 {
+    private readonly IReadOnlySet<string>? _fileFilter;
+
     public string Name => "TypeAnalyzer";
+
+    /// <summary>
+    /// Creates a TypeAnalyzer that analyzes all documents (full analysis mode).
+    /// </summary>
+    public TypeAnalyzer() : this(null)
+    {
+    }
+
+    /// <summary>
+    /// Creates a TypeAnalyzer with an optional file filter for incremental mode.
+    /// When fileFilter is non-null, only documents whose FilePath is in the filter are analyzed.
+    /// The filter should use StringComparer.OrdinalIgnoreCase for case-insensitive path matching.
+    /// </summary>
+    public TypeAnalyzer(IReadOnlySet<string>? fileFilter)
+    {
+        _fileFilter = fileFilter;
+    }
 
     public async Task AnalyzeAsync(
         AnalysisContext context,
@@ -52,6 +71,10 @@ public sealed class TypeAnalyzer : IAnalyzer
 
                 if (string.IsNullOrWhiteSpace(document.FilePath)) continue;
 
+                // Skip unchanged files in incremental mode
+                if (_fileFilter is not null && !_fileFilter.Contains(document.FilePath!))
+                    continue;
+
                 var tree = await document.GetSyntaxTreeAsync(ct);
                 if (tree is null) continue;
 
@@ -75,7 +98,7 @@ public sealed class TypeAnalyzer : IAnalyzer
                     var typeInfo = ExtractTypeInfo(symbol, document.FilePath!, context.ProjectAssemblyNames, project.Name);
                     builder.AddType(typeInfo);
 
-                    // Register implementors: only concrete types (class, record, struct) —
+                    // Register implementors: only concrete types (class, record, struct) --
                     // interfaces should not appear as implementors (STRC-04).
                     // Uses AllInterfaces so base interfaces also list this type as implementor.
                     if (symbol.TypeKind != TypeKind.Interface)
