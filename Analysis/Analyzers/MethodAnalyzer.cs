@@ -90,7 +90,7 @@ public sealed class MethodAnalyzer : IAnalyzer
                         ContainingTypeName: containingType?.ToDisplayString() ?? "global",
                         ContainingTypeId: typeId,
                         FilePath: document.FilePath!,
-                        DisplaySignature: symbol.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat),
+                        DisplaySignature: symbol.ToDisplayString(AnalysisHelpers.RichSignatureFormat),
                         DocComment: AnalysisHelpers.GetMethodDocstring(symbol)
                     );
 

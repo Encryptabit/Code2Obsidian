@@ -8,6 +8,93 @@ namespace Code2Obsidian.Analysis.Analyzers;
 internal static class AnalysisHelpers
 {
     /// <summary>
+    /// Custom display format that produces rich method signatures with access modifiers,
+    /// return types, modifiers, and full parameter info including names, types, and defaults.
+    /// Shared between TypeAnalyzer (constructor signatures) and MethodAnalyzer (method signatures).
+    /// </summary>
+    public static readonly SymbolDisplayFormat RichSignatureFormat = new(
+        typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameAndContainingTypes,
+        memberOptions:
+            SymbolDisplayMemberOptions.IncludeAccessibility |
+            SymbolDisplayMemberOptions.IncludeModifiers |
+            SymbolDisplayMemberOptions.IncludeType |
+            SymbolDisplayMemberOptions.IncludeParameters |
+            SymbolDisplayMemberOptions.IncludeRef,
+        parameterOptions:
+            SymbolDisplayParameterOptions.IncludeType |
+            SymbolDisplayParameterOptions.IncludeName |
+            SymbolDisplayParameterOptions.IncludeDefaultValue |
+            SymbolDisplayParameterOptions.IncludeParamsRefOut,
+        genericsOptions:
+            SymbolDisplayGenericsOptions.IncludeTypeParameters |
+            SymbolDisplayGenericsOptions.IncludeTypeConstraints,
+        miscellaneousOptions:
+            SymbolDisplayMiscellaneousOptions.UseSpecialTypes
+    );
+
+    /// <summary>
+    /// Determines if a named type symbol belongs to one of the solution's project assemblies.
+    /// Used to filter out external/framework types from note generation.
+    /// </summary>
+    public static bool IsUserType(INamedTypeSymbol? type, IReadOnlySet<string> projectAssemblyNames)
+    {
+        if (type is null) return false;
+        if (type.ContainingAssembly is null) return false;
+        return projectAssemblyNames.Contains(type.ContainingAssembly.Name);
+    }
+
+    /// <summary>
+    /// Maps a Roslyn Accessibility enum value to a lowercase C# access modifier string.
+    /// </summary>
+    public static string AccessibilityToString(Accessibility accessibility)
+    {
+        return accessibility switch
+        {
+            Accessibility.Public => "public",
+            Accessibility.Internal => "internal",
+            Accessibility.Protected => "protected",
+            Accessibility.ProtectedOrInternal => "protected internal",
+            Accessibility.ProtectedAndInternal => "private protected",
+            Accessibility.Private => "private",
+            _ => ""
+        };
+    }
+
+    /// <summary>
+    /// Returns the source position of a symbol's first declaration for ordering members
+    /// by their position in the source file. Returns int.MaxValue for symbols without
+    /// syntax references (e.g., metadata-only symbols).
+    /// </summary>
+    public static int GetDeclarationOrder(ISymbol symbol)
+    {
+        return symbol.DeclaringSyntaxReferences.FirstOrDefault()?.Span.Start ?? int.MaxValue;
+    }
+
+    /// <summary>
+    /// Extracts the summary text from a type's XML documentation comment.
+    /// Returns null if no documentation or no summary element is present.
+    /// </summary>
+    public static string? GetTypeDocComment(INamedTypeSymbol type)
+    {
+        try
+        {
+            var xml = type.GetDocumentationCommentXml(expandIncludes: true, cancellationToken: default);
+            if (string.IsNullOrWhiteSpace(xml)) return null;
+
+            var root = System.Xml.Linq.XElement.Parse($"<root>{xml}</root>");
+            var summary = root.Element("summary")?.Value?.Trim();
+            if (string.IsNullOrWhiteSpace(summary)) return null;
+
+            return NormalizeSpaces(summary);
+        }
+        catch
+        {
+            var fallback = type.GetDocumentationCommentXml(expandIncludes: false, cancellationToken: default);
+            return string.IsNullOrWhiteSpace(fallback) ? null : fallback.Trim();
+        }
+    }
+
+    /// <summary>
     /// Determines if a method symbol is "user code" (defined in source within the solution).
     /// Ported from Program.cs IsUserMethod() (lines 397-417), adapted to use
     /// assembly name strings instead of IAssemblySymbol equality.
