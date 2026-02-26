@@ -120,8 +120,48 @@
       "artifact_hash": "656ac21370e8b12d46bd125aa0c86dc74212a7c3ccf418f93c6210a7887ba0f8",
       "note": null,
       "recorded_at": "2026-02-26T10:03:28.522Z"
+    },
+    {
+      "entry_id": "1772111465377-ha40lb",
+      "gate": "discuss",
+      "phase": "5",
+      "review_id": "1b5e3a09-d39e-401a-bb7e-ab9f26126c4e",
+      "status": "approved",
+      "artifact_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "note": null,
+      "recorded_at": "2026-02-26T13:11:05.377Z"
+    },
+    {
+      "entry_id": "1772113541958-y755oz",
+      "gate": "plan",
+      "phase": "5",
+      "review_id": null,
+      "status": "approved",
+      "artifact_hash": null,
+      "note": null,
+      "recorded_at": "2026-02-26T13:45:41.958Z"
+    },
+    {
+      "entry_id": "1772113547996-gu3xe8",
+      "gate": "plan",
+      "phase": "5",
+      "review_id": null,
+      "status": "approved",
+      "artifact_hash": null,
+      "note": null,
+      "recorded_at": "2026-02-26T13:45:47.996Z"
+    },
+    {
+      "entry_id": "1772113548073-nfarw2",
+      "gate": "plan",
+      "phase": "5",
+      "review_id": null,
+      "status": "approved",
+      "artifact_hash": null,
+      "note": null,
+      "recorded_at": "2026-02-26T13:45:48.073Z"
     }
   ],
   "overrides": [],
-  "updated_at": "2026-02-26T10:03:28.523Z"
+  "updated_at": "2026-02-26T13:45:48.074Z"
 }

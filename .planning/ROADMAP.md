@@ -87,7 +87,11 @@ Plans:
   3. Running `--enrich` twice on the same unchanged code does not make redundant API calls (summaries are cached by content hash)
   4. Running without `--enrich` or without any LLM configured produces a complete vault with all structural analysis, just without LLM summaries
   5. Before enrichment begins on a large codebase, the tool displays an estimated API cost and prompts for confirmation
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+- [ ] 05-01-PLAN.md -- Foundation: NuGet packages, config model + loader + ChatClientFactory + interactive setup, SQLite V2 migration, SummaryCache, ContentHasher, EnrichedResult extension
+- [ ] 05-02-PLAN.md -- Core: LlmEnricher with cache-first logic and SemaphoreSlim concurrency, PromptBuilder, CostEstimator
+- [ ] 05-03-PLAN.md -- Integration: --enrich CLI flag, pipeline wiring, cost confirmation, token progress, emitter summary injection
 
 ## Progress
 
@@ -100,4 +104,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 2. Class & Type Analysis | 2/2 | Complete | 2026-02-26 |
 | 3. Output Quality & Metrics | 0/2 | In progress | - |
 | 4. Incremental Mode | 0/3 | Not started | - |
-| 5. LLM Enrichment | 0/? | Not started | - |
+| 5. LLM Enrichment | 0/3 | Not started | - |
