@@ -240,15 +240,14 @@ internal static class Program
                     state.DeleteState();
                     AnsiConsole.MarkupLine("[yellow]State wiped. Performing full analysis.[/]");
                     LlmEnricher? liveLlm = null;
-                    result = await RunWithProgress(ctx =>
+                    result = await RunWithProgress(async progress =>
                     {
-                        var progress = CreateProgress(ctx);
                         var (incEnrichers, llm) = BuildEnrichersWithProgress(enrichers, progress);
                         liveLlm = llm;
                         var incPipeline = new IncrementalPipeline(
                             context, progress, outputDir, stateDbPath, fanInThreshold, complexityThreshold,
                             enrichers: incEnrichers);
-                        return incPipeline.RunFullWithStateSaveAsync(ct);
+                        return await incPipeline.RunFullWithStateSaveAsync(ct);
                     });
                     CopyEnrichmentMetrics(result, liveLlm);
                     result.WasIncremental = false;
@@ -268,12 +267,11 @@ internal static class Program
                         return 1;
                     }
 
-                    result = await RunWithProgress(ctx =>
+                    result = await RunWithProgress(async progress =>
                     {
-                        var progress = CreateProgress(ctx);
                         var incPipeline = new IncrementalPipeline(
                             context, progress, outputDir, stateDbPath, fanInThreshold, complexityThreshold);
-                        return incPipeline.RunDryRunAsync(state, ct);
+                        return await incPipeline.RunDryRunAsync(state, ct);
                     });
                     result.WasIncremental = true;
                 }
@@ -285,15 +283,14 @@ internal static class Program
                         // Case B: no prior state -> full analysis with state save (INFR-05)
                         AnsiConsole.MarkupLine("[yellow]No prior state found. Performing full analysis and saving state.[/]");
                         LlmEnricher? liveLlmB = null;
-                        result = await RunWithProgress(ctx =>
+                        result = await RunWithProgress(async progress =>
                         {
-                            var progress = CreateProgress(ctx);
                             var (incEnrichers, llm) = BuildEnrichersWithProgress(enrichers, progress);
                             liveLlmB = llm;
                             var incPipeline = new IncrementalPipeline(
                                 context, progress, outputDir, stateDbPath, fanInThreshold, complexityThreshold,
                                 enrichers: incEnrichers);
-                            return incPipeline.RunFullWithStateSaveAsync(ct);
+                            return await incPipeline.RunFullWithStateSaveAsync(ct);
                         });
                         CopyEnrichmentMetrics(result, liveLlmB);
                         result.WasIncremental = true;
@@ -302,15 +299,14 @@ internal static class Program
                     {
                         // Case C: prior state exists -> run incremental two-pass flow (INFR-03)
                         LlmEnricher? liveLlmC = null;
-                        result = await RunWithProgress(ctx =>
+                        result = await RunWithProgress(async progress =>
                         {
-                            var progress = CreateProgress(ctx);
                             var (incEnrichers, llm) = BuildEnrichersWithProgress(enrichers, progress);
                             liveLlmC = llm;
                             var incPipeline = new IncrementalPipeline(
                                 context, progress, outputDir, stateDbPath, fanInThreshold, complexityThreshold,
                                 enrichers: incEnrichers);
-                            return incPipeline.RunIncrementalAsync(state, ct);
+                            return await incPipeline.RunIncrementalAsync(state, ct);
                         });
                         CopyEnrichmentMetrics(result, liveLlmC);
                         result.WasIncremental = true;
@@ -413,7 +409,7 @@ internal static class Program
     }
 
     /// <summary>
-    /// Runs the full pipeline (non-incremental Case A) with Spectre.Console progress.
+    /// Runs the full pipeline (non-incremental Case A) with Live display.
     /// </summary>
     private static async Task<PipelineResult> RunFullPipeline(
         AnalysisContext context, string outputDir, int fanInThreshold, int complexityThreshold,
@@ -422,110 +418,48 @@ internal static class Program
         var analyzers = new List<IAnalyzer> { new MethodAnalyzer(), new TypeAnalyzer() };
         var emitter = new ObsidianEmitter(fanInThreshold, complexityThreshold);
 
-        PipelineResult result = null!;
+        LlmEnricher? liveLlm = null;
+        var result = await RunWithProgress(async progress =>
+        {
+            // Rebuild enrichers with live progress
+            var (liveEnrichers, llm) = BuildEnrichersWithProgress(enrichers, progress);
+            liveLlm = llm;
 
-        await AnsiConsole.Progress()
-            .Columns(
-                new TaskDescriptionColumn(),
-                new ProgressBarColumn(),
-                new PercentageColumn(),
-                new SpinnerColumn(),
-                new ElapsedTimeColumn())
-            .StartAsync(async ctx =>
-            {
-                var progress = CreateProgress(ctx);
+            var pipeline = new Pipeline.Pipeline(analyzers, liveEnrichers, emitter);
+            return await pipeline.RunAsync(context, outputDir, progress, ct);
+        });
 
-                // Rebuild enrichers with live progress
-                var (liveEnrichers, liveLlm) = BuildEnrichersWithProgress(enrichers, progress);
-
-                var pipeline = new Pipeline.Pipeline(analyzers, liveEnrichers, emitter);
-                result = await pipeline.RunAsync(context, outputDir, progress, ct);
-
-                // Copy enrichment metrics from the live enricher
-                if (liveLlm is not null)
-                {
-                    result.EntitiesEnriched = liveLlm.EntitiesEnriched;
-                    result.EntitiesCached = liveLlm.EntitiesCached;
-                    result.EntitiesFailed = liveLlm.EntitiesFailed;
-                    result.InputTokensUsed = liveLlm.InputTokensUsed;
-                    result.OutputTokensUsed = liveLlm.OutputTokensUsed;
-                }
-
-                // Mark all tasks complete (progress tasks handled by CreateProgress)
-            });
-
+        CopyEnrichmentMetrics(result, liveLlm);
         return result;
     }
 
     /// <summary>
-    /// Runs an async operation within a Spectre.Console progress context.
-    /// Used for incremental pipeline operations that manage their own progress reporting.
+    /// Runs an async operation within a Live display with fixed-width character bars.
+    /// The IProgress callback uses a lock to serialize concurrent updates from parallel enrichment.
     /// </summary>
     private static async Task<PipelineResult> RunWithProgress(
-        Func<ProgressContext, Task<PipelineResult>> operation)
+        Func<IProgress<PipelineProgress>, Task<PipelineResult>> operation)
     {
         PipelineResult result = null!;
+        var renderLock = new object();
 
-        await AnsiConsole.Progress()
-            .Columns(
-                new TaskDescriptionColumn(),
-                new ProgressBarColumn(),
-                new PercentageColumn(),
-                new SpinnerColumn(),
-                new ElapsedTimeColumn())
+        await AnsiConsole.Live(new Text("Starting..."))
+            .AutoClear(false)
             .StartAsync(async ctx =>
             {
-                result = await operation(ctx);
+                var state = new ProgressState();
+                var progress = new Progress<PipelineProgress>(p =>
+                {
+                    lock (renderLock)
+                    {
+                        state.Update(p);
+                        ctx.UpdateTarget(RenderProgressDisplay(state));
+                    }
+                });
+                result = await operation(progress);
             });
 
         return result;
-    }
-
-    /// <summary>
-    /// Creates a pipeline progress reporter from a Spectre.Console progress context.
-    /// </summary>
-    private static IProgress<PipelineProgress> CreateProgress(ProgressContext ctx)
-    {
-        var analysisTask = ctx.AddTask("Analyzing...", maxValue: 1);
-        var enrichmentTask = ctx.AddTask("Enriching...", maxValue: 1);
-        enrichmentTask.IsIndeterminate = true;
-        var emissionTask = ctx.AddTask("Emitting...", maxValue: 1);
-        emissionTask.IsIndeterminate = true;
-
-        return new Progress<PipelineProgress>(p =>
-        {
-            switch (p.Stage)
-            {
-                case PipelineStage.Analyzing:
-                    analysisTask.Description = p.Description;
-                    if (p.Total > 0)
-                    {
-                        analysisTask.MaxValue = p.Total;
-                        analysisTask.Value = p.Current;
-                    }
-                    break;
-
-                case PipelineStage.Enriching:
-                    enrichmentTask.IsIndeterminate = false;
-                    enrichmentTask.Description = p.Description;
-                    if (p.Total > 0)
-                    {
-                        enrichmentTask.MaxValue = p.Total;
-                        enrichmentTask.Value = p.Current;
-                    }
-                    break;
-
-                case PipelineStage.Emitting:
-                    emissionTask.IsIndeterminate = false;
-                    emissionTask.Description = p.Description;
-                    if (p.Total > 0)
-                    {
-                        emissionTask.MaxValue = p.Total;
-                        emissionTask.Value = p.Current;
-                    }
-                    break;
-            }
-        });
     }
 
     #region Progress Display
