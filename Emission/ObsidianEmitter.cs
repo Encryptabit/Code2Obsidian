@@ -1,4 +1,5 @@
 using System.Text;
+using Code2Obsidian.Analysis;
 using Code2Obsidian.Analysis.Models;
 using Code2Obsidian.Enrichment;
 
@@ -6,11 +7,9 @@ namespace Code2Obsidian.Emission;
 
 /// <summary>
 /// Generates Obsidian markdown notes from enriched analysis data.
-/// Emits one .md file per method (per-method mode is the default for Phase 1).
-///
-/// Ported from Program.cs RenderMethodSection (lines 172-219),
-/// RenderMethodNote (lines 222-239), and Sanitize (lines 362-368).
-/// Adapted to use domain MethodInfo and CallGraph instead of IMethodSymbol dictionaries.
+/// Emits one .md file per method, one per class/struct/record, and one per interface.
+/// Class notes are hub pages linking to methods, base classes, interfaces, and DI dependencies.
+/// Interface notes include "Known Implementors" sections.
 /// </summary>
 public sealed class ObsidianEmitter : IEmitter
 {
@@ -25,6 +24,7 @@ public sealed class ObsidianEmitter : IEmitter
 
         Directory.CreateDirectory(outputDirectory);
 
+        // Emit method notes
         foreach (var (methodId, method) in analysis.Methods)
         {
             ct.ThrowIfCancellationRequested();
@@ -35,6 +35,28 @@ public sealed class ObsidianEmitter : IEmitter
             try
             {
                 var content = RenderMethodNote(method, analysis.CallGraph);
+                await File.WriteAllTextAsync(filePath, content, ct);
+                notesWritten++;
+            }
+            catch (IOException ex)
+            {
+                warnings.Add($"Failed to write '{filePath}': {ex.Message}");
+            }
+        }
+
+        // Emit class and interface notes
+        foreach (var (typeId, typeInfo) in analysis.Types)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var fileName = Sanitize($"{typeInfo.FullName}.md");
+            var filePath = Path.Combine(outputDirectory, fileName);
+
+            try
+            {
+                var content = typeInfo.Kind == TypeKindInfo.Interface
+                    ? RenderInterfaceNote(typeInfo, analysis)
+                    : RenderClassNote(typeInfo, analysis);
                 await File.WriteAllTextAsync(filePath, content, ct);
                 notesWritten++;
             }
@@ -152,6 +174,246 @@ public sealed class ObsidianEmitter : IEmitter
         if (dotIndex < 0) return value;
 
         return value.Substring(dotIndex + 1, parenIndex - dotIndex - 1);
+    }
+
+    /// <summary>
+    /// Renders a complete markdown note for a class, record, or struct type.
+    /// Includes YAML frontmatter, purpose summary, inheritance wikilinks,
+    /// DI dependencies, properties/fields, and member index.
+    /// </summary>
+    private static string RenderClassNote(TypeInfo typeInfo, AnalysisResult analysis)
+    {
+        var sb = new StringBuilder();
+
+        // Build a set of known type FullNames for wikilink resolution
+        var knownTypes = new HashSet<string>(
+            analysis.Types.Values.Select(t => t.FullName));
+
+        // YAML frontmatter (Phase 2 minimal set)
+        sb.AppendLine("---");
+        sb.AppendLine(typeInfo.BaseClassFullName is not null
+            ? $"base_class: \"{typeInfo.BaseClassFullName}\""
+            : "base_class: ~");
+        if (typeInfo.InterfaceFullNames.Count > 0)
+        {
+            sb.AppendLine("interfaces:");
+            foreach (var iface in typeInfo.InterfaceFullNames)
+                sb.AppendLine($"  - \"{iface}\"");
+        }
+        else
+        {
+            sb.AppendLine("interfaces: []");
+        }
+        sb.AppendLine($"namespace: \"{typeInfo.Namespace}\"");
+        sb.AppendLine($"source_file: \"{typeInfo.FilePath}\"");
+        sb.AppendLine("---");
+        sb.AppendLine();
+
+        // Title
+        sb.AppendLine($"# {typeInfo.Name}");
+        sb.AppendLine();
+
+        // Purpose summary (DocComment blockquote or kind/namespace fallback)
+        if (!string.IsNullOrWhiteSpace(typeInfo.DocComment))
+        {
+            sb.AppendLine($"> {typeInfo.DocComment}");
+        }
+        else
+        {
+            sb.AppendLine($"> {typeInfo.Kind} in `{typeInfo.Namespace}`");
+        }
+        sb.AppendLine();
+
+        // Source path
+        sb.AppendLine($"**Path**: `{typeInfo.FilePath}`");
+        sb.AppendLine();
+
+        // Type relationships
+        if (typeInfo.BaseClassFullName is not null)
+        {
+            if (knownTypes.Contains(typeInfo.BaseClassFullName))
+                sb.AppendLine($"**Inherits from**: [[{Sanitize(typeInfo.BaseClassFullName)}]]");
+            else
+                sb.AppendLine($"**Inherits from**: {typeInfo.BaseClassName}");
+            sb.AppendLine();
+        }
+
+        if (typeInfo.InterfaceFullNames.Count > 0)
+        {
+            sb.AppendLine("**Implements**:");
+            for (int i = 0; i < typeInfo.InterfaceFullNames.Count; i++)
+            {
+                var fullName = typeInfo.InterfaceFullNames[i];
+                var displayName = typeInfo.InterfaceNames[i];
+                if (knownTypes.Contains(fullName))
+                    sb.AppendLine($"- [[{Sanitize(fullName)}]]");
+                else
+                    sb.AppendLine($"- {displayName}");
+            }
+            sb.AppendLine();
+        }
+
+        // Dependencies section (DI from all constructors, deduped by TypeNoteFullName)
+        var diDeps = typeInfo.Constructors
+            .SelectMany(c => c.Parameters)
+            .Where(p => p.TypeNoteFullName is not null)
+            .GroupBy(p => p.TypeNoteFullName!)
+            .Select(g => g.First())
+            .ToList();
+
+        if (diDeps.Count > 0)
+        {
+            sb.AppendLine("## Dependencies");
+            foreach (var dep in diDeps)
+            {
+                sb.AppendLine($"- [[{Sanitize(dep.TypeNoteFullName!)}]] (`{dep.Name}`)");
+            }
+            sb.AppendLine();
+        }
+
+        // Properties and Fields
+        if (typeInfo.Properties.Count > 0 || typeInfo.Fields.Count > 0)
+        {
+            sb.AppendLine("## Properties");
+            foreach (var prop in typeInfo.Properties)
+                sb.AppendLine($"- `{prop.Name}`: {prop.TypeName}");
+            foreach (var field in typeInfo.Fields)
+                sb.AppendLine($"- `{field.Name}`: {field.TypeName}");
+            sb.AppendLine();
+        }
+
+        // Members section (compact wikilink index)
+        if (typeInfo.MethodIds.Count > 0)
+        {
+            sb.AppendLine("## Members");
+            foreach (var methodId in typeInfo.MethodIds)
+            {
+                if (analysis.Methods.TryGetValue(methodId, out var methodInfo))
+                {
+                    var wikilink = Sanitize($"{methodInfo.ContainingTypeName}.{methodInfo.Name}");
+                    sb.AppendLine($"- [[{wikilink}]]");
+                }
+            }
+            sb.AppendLine();
+        }
+
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Renders a complete markdown note for an interface type.
+    /// Same structure as class notes, but includes "Known Implementors" section
+    /// and omits the Dependencies section (interfaces have no constructors with DI).
+    /// </summary>
+    private static string RenderInterfaceNote(TypeInfo typeInfo, AnalysisResult analysis)
+    {
+        var sb = new StringBuilder();
+
+        var knownTypes = new HashSet<string>(
+            analysis.Types.Values.Select(t => t.FullName));
+
+        // YAML frontmatter
+        sb.AppendLine("---");
+        sb.AppendLine(typeInfo.BaseClassFullName is not null
+            ? $"base_class: \"{typeInfo.BaseClassFullName}\""
+            : "base_class: ~");
+        if (typeInfo.InterfaceFullNames.Count > 0)
+        {
+            sb.AppendLine("interfaces:");
+            foreach (var iface in typeInfo.InterfaceFullNames)
+                sb.AppendLine($"  - \"{iface}\"");
+        }
+        else
+        {
+            sb.AppendLine("interfaces: []");
+        }
+        sb.AppendLine($"namespace: \"{typeInfo.Namespace}\"");
+        sb.AppendLine($"source_file: \"{typeInfo.FilePath}\"");
+        sb.AppendLine("---");
+        sb.AppendLine();
+
+        // Title
+        sb.AppendLine($"# {typeInfo.Name}");
+        sb.AppendLine();
+
+        // Purpose summary
+        if (!string.IsNullOrWhiteSpace(typeInfo.DocComment))
+        {
+            sb.AppendLine($"> {typeInfo.DocComment}");
+        }
+        else
+        {
+            sb.AppendLine($"> {typeInfo.Kind} in `{typeInfo.Namespace}`");
+        }
+        sb.AppendLine();
+
+        // Source path
+        sb.AppendLine($"**Path**: `{typeInfo.FilePath}`");
+        sb.AppendLine();
+
+        // Type relationships (interfaces can extend other interfaces)
+        if (typeInfo.InterfaceFullNames.Count > 0)
+        {
+            sb.AppendLine("**Extends**:");
+            for (int i = 0; i < typeInfo.InterfaceFullNames.Count; i++)
+            {
+                var fullName = typeInfo.InterfaceFullNames[i];
+                var displayName = typeInfo.InterfaceNames[i];
+                if (knownTypes.Contains(fullName))
+                    sb.AppendLine($"- [[{Sanitize(fullName)}]]");
+                else
+                    sb.AppendLine($"- {displayName}");
+            }
+            sb.AppendLine();
+        }
+
+        // Properties (interfaces can have property declarations)
+        if (typeInfo.Properties.Count > 0)
+        {
+            sb.AppendLine("## Properties");
+            foreach (var prop in typeInfo.Properties)
+                sb.AppendLine($"- `{prop.Name}`: {prop.TypeName}");
+            sb.AppendLine();
+        }
+
+        // Members section
+        if (typeInfo.MethodIds.Count > 0)
+        {
+            sb.AppendLine("## Members");
+            foreach (var methodId in typeInfo.MethodIds)
+            {
+                if (analysis.Methods.TryGetValue(methodId, out var methodInfo))
+                {
+                    var wikilink = Sanitize($"{methodInfo.ContainingTypeName}.{methodInfo.Name}");
+                    sb.AppendLine($"- [[{wikilink}]]");
+                }
+            }
+            sb.AppendLine();
+        }
+
+        // Known Implementors section
+        var typeIdForLookup = typeInfo.Id;
+        if (analysis.Implementors.TryGetValue(typeIdForLookup, out var implementorIds)
+            && implementorIds.Count > 0)
+        {
+            sb.AppendLine("## Known Implementors");
+            foreach (var implId in implementorIds)
+            {
+                if (analysis.Types.TryGetValue(implId, out var implType))
+                {
+                    sb.AppendLine($"- [[{Sanitize(implType.FullName)}]]");
+                }
+            }
+            sb.AppendLine();
+        }
+        else
+        {
+            sb.AppendLine("## Known Implementors");
+            sb.AppendLine("_No known implementors in this solution._");
+            sb.AppendLine();
+        }
+
+        return sb.ToString();
     }
 
     /// <summary>
