@@ -58,7 +58,10 @@ Plans:
   3. Dataview queries against the vault can filter by complexity, fan_in, fan_out, pattern, and access modifier fields
   4. Methods with fan-in above a configurable threshold appear with a `danger/high-fan-in` tag; high-complexity methods are similarly tagged
   5. Classes are tagged with detected architectural patterns (repository, controller, service, middleware) visible in Obsidian tag navigation
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 03-01-PLAN.md -- Domain model extensions (MethodInfo, TypeInfo) and cyclomatic complexity calculator
+- [ ] 03-02-PLAN.md -- Emitter overhaul: rich frontmatter, wikilink fix, danger callouts, pattern tags, CLI threshold options
 
 ### Phase 4: Incremental Mode
 **Goal**: Developers working on large codebases can re-run the tool after code changes and only changed files are reanalyzed, cutting regeneration time dramatically
@@ -91,6 +94,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 |-------|----------------|--------|-----------|
 | 1. CLI Foundation & Pipeline Architecture | 2/2 | Complete | 2026-02-26 |
 | 2. Class & Type Analysis | 2/2 | Complete | 2026-02-26 |
-| 3. Output Quality & Metrics | 0/? | In progress | - |
+| 3. Output Quality & Metrics | 0/2 | In progress | - |
 | 4. Incremental Mode | 0/? | Not started | - |
 | 5. LLM Enrichment | 0/? | Not started | - |

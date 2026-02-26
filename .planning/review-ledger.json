@@ -60,8 +60,38 @@
       "artifact_hash": null,
       "note": null,
       "recorded_at": "2026-02-26T05:41:47.468Z"
+    },
+    {
+      "entry_id": "1772087588537-oad2on",
+      "gate": "execute",
+      "phase": "2",
+      "review_id": "92e6fedc-32fd-4a9c-b1a1-82a66bd13c28",
+      "status": "approved",
+      "artifact_hash": "eb1de6daaa205a78ad0d0bbd29aeeee3cb014e2e8268c1ee99db2e3b91db1c31",
+      "note": null,
+      "recorded_at": "2026-02-26T06:33:08.537Z"
+    },
+    {
+      "entry_id": "1772088463549-hqsyri",
+      "gate": "discuss",
+      "phase": "3",
+      "review_id": "7232850d-4204-42c6-8d68-eb3a0e6f3cdc",
+      "status": "approved",
+      "artifact_hash": "00a73d48fe077a9659e786219aab1b9f0c6b09ebde6f2fc98f59e8c55ececdef",
+      "note": null,
+      "recorded_at": "2026-02-26T06:47:43.549Z"
+    },
+    {
+      "entry_id": "1772089529023-g9ntiu",
+      "gate": "plan",
+      "phase": "3",
+      "review_id": null,
+      "status": "approved",
+      "artifact_hash": null,
+      "note": null,
+      "recorded_at": "2026-02-26T07:05:29.023Z"
     }
   ],
   "overrides": [],
-  "updated_at": "2026-02-26T05:41:47.469Z"
+  "updated_at": "2026-02-26T07:05:29.024Z"
 }
