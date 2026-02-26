@@ -1,3 +1,6 @@
+using Code2Obsidian.Analysis;
+using Code2Obsidian.Emission;
+
 namespace Code2Obsidian.Pipeline;
 
 /// <summary>
@@ -19,6 +22,31 @@ public sealed class PipelineResult
     public int FilesAnalyzed { get; set; }
     public int NotesGenerated { get; set; }
     public int EnrichersRun { get; set; }
+
+    /// <summary>
+    /// Number of files skipped due to being unchanged (incremental mode).
+    /// </summary>
+    public int FilesSkipped { get; set; }
+
+    /// <summary>
+    /// Number of stale notes removed from the vault (incremental mode).
+    /// </summary>
+    public int NotesDeleted { get; set; }
+
+    /// <summary>
+    /// Whether this run used incremental mode.
+    /// </summary>
+    public bool WasIncremental { get; set; }
+
+    /// <summary>
+    /// The analysis result, exposed for state saving in incremental mode.
+    /// </summary>
+    public AnalysisResult? AnalysisResult { get; set; }
+
+    /// <summary>
+    /// The emission result, exposed for state saving in incremental mode.
+    /// </summary>
+    public EmitResult? EmitResult { get; set; }
 
     /// <summary>
     /// Warnings accumulated from all pipeline stages (skipped files, write failures, etc.).

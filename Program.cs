@@ -36,12 +36,30 @@ internal static class Program
             DefaultValueFactory = _ => 15
         };
 
+        var incrementalOption = new Option<bool>("--incremental")
+        {
+            Description = "Only regenerate notes for files changed since last run"
+        };
+
+        var fullRebuildOption = new Option<bool>("--full-rebuild")
+        {
+            Description = "Force full analysis even when incremental state exists"
+        };
+
+        var dryRunOption = new Option<bool>("--dry-run")
+        {
+            Description = "Show what would be regenerated without writing files"
+        };
+
         var rootCommand = new RootCommand("Analyze a C# solution and generate an Obsidian vault")
         {
             inputArgument,
             outputOption,
             fanInThresholdOption,
-            complexityThresholdOption
+            complexityThresholdOption,
+            incrementalOption,
+            fullRebuildOption,
+            dryRunOption
         };
 
         rootCommand.SetAction(async (parseResult, cancellationToken) =>
@@ -50,8 +68,12 @@ internal static class Program
             var output = parseResult.GetValue(outputOption);
             var fanInThreshold = parseResult.GetValue(fanInThresholdOption);
             var complexityThreshold = parseResult.GetValue(complexityThresholdOption);
+            var incremental = parseResult.GetValue(incrementalOption);
+            var fullRebuild = parseResult.GetValue(fullRebuildOption);
+            var dryRun = parseResult.GetValue(dryRunOption);
 
-            return await RunPipelineAsync(input, output, fanInThreshold, complexityThreshold, cancellationToken);
+            return await RunPipelineAsync(input, output, fanInThreshold, complexityThreshold,
+                incremental, fullRebuild, dryRun, cancellationToken);
         });
 
         var parseResult = rootCommand.Parse(args);
@@ -59,7 +81,8 @@ internal static class Program
     }
 
     private static async Task<int> RunPipelineAsync(
-        string input, string? output, int fanInThreshold, int complexityThreshold, CancellationToken ct)
+        string input, string? output, int fanInThreshold, int complexityThreshold,
+        bool incremental, bool fullRebuild, bool dryRun, CancellationToken ct)
     {
         try
         {
@@ -79,6 +102,9 @@ internal static class Program
             AnsiConsole.WriteLine();
 
             using var context = await loader.LoadAsync(solutionPath, ct);
+
+            // TODO: Task 2 will add IncrementalPipeline routing for incremental/fullRebuild/dryRun flags.
+            // For now, all paths use the standard full pipeline.
 
             // Compose pipeline (no DI container in Phase 1)
             var analyzers = new List<IAnalyzer> { new MethodAnalyzer(), new TypeAnalyzer() };
@@ -306,20 +332,28 @@ internal static class Program
             .AddColumn("Duration")
             .AddColumn("Items");
 
+        var analysisItems = result.WasIncremental
+            ? $"{result.FilesAnalyzed} files ({result.FilesSkipped} skipped)"
+            : $"{result.ProjectsAnalyzed} projects, {result.FilesAnalyzed} files";
+
         table.AddRow(
             "Analysis",
             result.AnalysisDuration.ToString(@"mm\:ss\.ff"),
-            $"{result.ProjectsAnalyzed} projects, {result.FilesAnalyzed} files");
+            analysisItems);
 
         table.AddRow(
             "Enrichment",
             result.EnrichmentDuration.ToString(@"mm\:ss\.ff"),
             result.EnrichersRun == 0 ? "skipped" : $"{result.EnrichersRun} enrichers");
 
+        var emissionItems = $"{result.NotesGenerated} notes";
+        if (result.WasIncremental && result.NotesDeleted > 0)
+            emissionItems += $" ({result.NotesDeleted} stale deleted)";
+
         table.AddRow(
             "Emission",
             result.EmissionDuration.ToString(@"mm\:ss\.ff"),
-            $"{result.NotesGenerated} notes");
+            emissionItems);
 
         table.AddRow(
             "[bold]Total[/]",
