@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-25)
 Phase: 5.1 (Structured XML Output & Progress Fix)
 Plan: 2 of 2 in current phase -- COMPLETE
 Status: Phase 05.1 COMPLETE
-Last activity: 2026-02-26 -- Completed 05.1-02 (Progress Bar Layout Fix)
+Last activity: 2026-02-26 -- Completed 05.1-01 (Structured XML Output) [executed after 05.1-02]
 
 Progress: [############] 100%
 
@@ -90,6 +90,12 @@ Recent decisions affecting current work:
 - [05-03]: LlmEnricher reconstructed per Spectre.Console progress context via BuildEnrichersWithProgress for correct IProgress wiring
 - [05-03]: Cost confirmation Func callback injected from Program.cs to keep LlmEnricher free of Spectre.Console dependency
 - [05-03]: ## Summary section placed after danger callouts (methods) and after source path (types) for prominent placement
+- [05.1-01]: XDocument.Parse wraps raw text in <root> element for safe multi-element XML parsing
+- [05.1-01]: Triple fallback: XDocument -> regex with Singleline -> raw text wrapping (never crashes)
+- [05.1-01]: WebUtility.HtmlDecode applied to all extracted XML values for entity decoding
+- [05.1-01]: Tags stored as comma-separated string in SQLite, split on read
+- [05.1-01]: SanitizeTag: lowercase + strip non-alphanumeric except hyphen for YAML safety
+- [05.1-01]: Purpose rendered as bold first line in ## Summary, followed by detail paragraph
 - [05.1-02]: AnsiConsole.Live() replaces Progress() to eliminate jitter from shared TaskDescriptionColumn resizing
 - [05.1-02]: Lock-serialized IProgress callbacks for thread-safe concurrent enrichment updates
 - [05.1-02]: RunFullPipeline delegates to RunWithProgress for single Live display implementation
@@ -109,5 +115,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-26
-Stopped at: Completed 05.1-02-PLAN.md (Phase 05.1 complete)
+Stopped at: Completed 05.1-01-PLAN.md (all Phase 05.1 plans done)
 Resume file: N/A -- all plans executed
