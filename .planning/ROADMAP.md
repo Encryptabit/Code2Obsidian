@@ -13,7 +13,7 @@ Code2Obsidian is a brownfield .NET CLI with working Roslyn analysis and basic ma
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: CLI Foundation & Pipeline Architecture** - Refactor monolith into pipeline, add proper CLI parsing and progress UX (completed 2026-02-26)
-- [ ] **Phase 2: Class & Type Analysis** - Generate class-level notes with inheritance, interfaces, DI, and rich method signatures
+- [x] **Phase 2: Class & Type Analysis** - Generate class-level notes with inheritance, interfaces, DI, and rich method signatures (completed 2026-02-26)
 - [ ] **Phase 3: Output Quality & Metrics** - Pattern detection, danger annotations, cyclomatic complexity, Dataview-compatible frontmatter
 - [ ] **Phase 4: Incremental Mode** - Git-based change detection with selective regeneration for large codebases
 - [ ] **Phase 5: LLM Enrichment** - Provider-agnostic LLM summaries with caching and cost estimation
@@ -45,8 +45,8 @@ Plans:
   5. Method signatures in all notes include return type, parameter names with types, and access modifiers
 **Plans**: 2 plans
 Plans:
-- [ ] 02-01-PLAN.md -- Domain models (TypeInfo, PropertyFieldInfo, ConstructorInfo, ParameterInfo), TypeAnalyzer, rich method signatures
-- [ ] 02-02-PLAN.md -- Class/interface note emission in ObsidianEmitter, pipeline wiring
+- [x] 02-01-PLAN.md -- Domain models (TypeInfo, PropertyFieldInfo, ConstructorInfo, ParameterInfo), TypeAnalyzer, rich method signatures
+- [x] 02-02-PLAN.md -- Class/interface note emission in ObsidianEmitter, pipeline wiring
 
 ### Phase 3: Output Quality & Metrics
 **Goal**: The generated vault uses collision-free wikilinks, rich YAML frontmatter with computed metrics, pattern-based tags, and danger annotations that flag risky methods
@@ -90,7 +90,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. CLI Foundation & Pipeline Architecture | 2/2 | Complete | 2026-02-26 |
-| 2. Class & Type Analysis | 0/2 | In progress | - |
-| 3. Output Quality & Metrics | 0/? | Not started | - |
+| 2. Class & Type Analysis | 2/2 | Complete | 2026-02-26 |
+| 3. Output Quality & Metrics | 0/? | In progress | - |
 | 4. Incremental Mode | 0/? | Not started | - |
 | 5. LLM Enrichment | 0/? | Not started | - |
