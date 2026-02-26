@@ -1,4 +1,5 @@
 using Code2Obsidian.Loading;
+using Code2Obsidian.Pipeline;
 
 namespace Code2Obsidian.Analysis;
 
@@ -15,6 +16,7 @@ public interface IAnalyzer
 
     /// <summary>
     /// Analyzes the solution context and adds findings to the builder.
+    /// Progress is reported at project/file granularity through the optional progress parameter.
     /// </summary>
-    Task AnalyzeAsync(AnalysisContext context, AnalysisResultBuilder builder, CancellationToken ct);
+    Task AnalyzeAsync(AnalysisContext context, AnalysisResultBuilder builder, IProgress<PipelineProgress>? progress, CancellationToken ct);
 }

@@ -27,7 +27,7 @@ public sealed class SolutionLoader
     {
         EnsureMsbuildRegistered();
 
-        using var workspace = MSBuildWorkspace.Create();
+        var workspace = MSBuildWorkspace.Create();
         workspace.WorkspaceFailed += (_, e) =>
         {
             _diagnostics.Add(e.Diagnostic.Message);
@@ -36,7 +36,7 @@ public sealed class SolutionLoader
         var solution = await workspace.OpenSolutionAsync(solutionPath, cancellationToken: ct);
         var assemblyNames = await GetProjectAssemblyNamesAsync(solution, ct);
 
-        return new AnalysisContext(solution, assemblyNames);
+        return new AnalysisContext(workspace, solution, assemblyNames);
     }
 
     /// <summary>

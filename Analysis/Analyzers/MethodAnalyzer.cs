@@ -1,5 +1,6 @@
 using Code2Obsidian.Analysis.Models;
 using Code2Obsidian.Loading;
+using Code2Obsidian.Pipeline;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
@@ -19,12 +20,26 @@ public sealed class MethodAnalyzer : IAnalyzer
 {
     public string Name => "MethodAnalyzer";
 
-    public async Task AnalyzeAsync(AnalysisContext context, AnalysisResultBuilder builder, CancellationToken ct)
+    public async Task AnalyzeAsync(AnalysisContext context, AnalysisResultBuilder builder, IProgress<PipelineProgress>? progress, CancellationToken ct)
     {
-        foreach (var project in context.Solution.Projects
-            .Where(p => p.Language == LanguageNames.CSharp))
+        var csharpProjects = context.Solution.Projects
+            .Where(p => p.Language == LanguageNames.CSharp)
+            .ToList();
+
+        int projectIndex = 0;
+        int totalFiles = csharpProjects.Sum(p => p.Documents.Count());
+        int fileIndex = 0;
+
+        foreach (var project in csharpProjects)
         {
             ct.ThrowIfCancellationRequested();
+
+            projectIndex++;
+            progress?.Report(new PipelineProgress(
+                PipelineStage.Analyzing,
+                $"Analyzing {project.Name}... ({projectIndex}/{csharpProjects.Count})",
+                fileIndex,
+                totalFiles));
 
             var compilation = await project.GetCompilationAsync(ct);
             if (compilation is null) continue;
@@ -34,6 +49,8 @@ public sealed class MethodAnalyzer : IAnalyzer
             foreach (var document in project.Documents)
             {
                 ct.ThrowIfCancellationRequested();
+
+                fileIndex++;
 
                 // Skip non-source docs
                 if (string.IsNullOrWhiteSpace(document.FilePath)) continue;
@@ -45,6 +62,12 @@ public sealed class MethodAnalyzer : IAnalyzer
                 if (model is null) continue;
 
                 builder.IncrementFileCount();
+
+                progress?.Report(new PipelineProgress(
+                    PipelineStage.Analyzing,
+                    $"Analyzing {project.Name}/{Path.GetFileName(document.FilePath)}",
+                    fileIndex,
+                    totalFiles));
 
                 var root = await tree.GetRootAsync(ct);
 

@@ -47,7 +47,7 @@ public sealed class Pipeline
                 i,
                 _analyzers.Count));
 
-            await analyzer.AnalyzeAsync(context, builder, ct);
+            await analyzer.AnalyzeAsync(context, builder, progress, ct);
         }
 
         var analysisResult = builder.Build();

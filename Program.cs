@@ -62,7 +62,7 @@ internal static class Program
             AnsiConsole.MarkupLine($"[bold]Output:[/]   {outputDir}");
             AnsiConsole.WriteLine();
 
-            var context = await loader.LoadAsync(solutionPath, ct);
+            using var context = await loader.LoadAsync(solutionPath, ct);
 
             // Compose pipeline (no DI container in Phase 1)
             var analyzers = new List<IAnalyzer> { new MethodAnalyzer() };
@@ -131,6 +131,12 @@ internal static class Program
                     emissionTask.Value = emissionTask.MaxValue;
                 });
 
+            // Add loader diagnostics as warnings BEFORE rendering
+            if (loader.Diagnostics.Count > 0)
+            {
+                result!.Warnings.AddRange(loader.Diagnostics);
+            }
+
             // Display end-of-run summary (after progress context closes)
             RenderSummary(result!);
 
@@ -140,12 +146,6 @@ internal static class Program
                 AnsiConsole.MarkupLine($"\n[yellow]{result.Warnings.Count} warning(s):[/]");
                 foreach (var warning in result.Warnings)
                     AnsiConsole.MarkupLine($"  [yellow]![/] {Markup.Escape(warning)}");
-            }
-
-            // Display loader diagnostics as warnings
-            if (loader.Diagnostics.Count > 0)
-            {
-                result.Warnings.AddRange(loader.Diagnostics);
             }
 
             return result.ExitCode;
