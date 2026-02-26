@@ -3,13 +3,15 @@ using Code2Obsidian.Analysis.Models;
 namespace Code2Obsidian.Analysis;
 
 /// <summary>
-/// Mutable builder that accumulates methods and call edges during analysis.
+/// Mutable builder that accumulates methods, types, and call edges during analysis.
 /// Thread-unsafe -- intended for single-threaded sequential analyzer execution.
 /// </summary>
 public sealed class AnalysisResultBuilder
 {
     private readonly Dictionary<MethodId, MethodInfo> _methods = new();
     private readonly CallGraph _callGraph = new();
+    private readonly Dictionary<TypeId, TypeInfo> _types = new();
+    private readonly Dictionary<TypeId, List<TypeId>> _implementors = new();
     private int _projectCount;
     private int _fileCount;
 
@@ -27,6 +29,28 @@ public sealed class AnalysisResultBuilder
     public void AddCallEdge(MethodId caller, MethodId callee)
     {
         _callGraph.AddEdge(caller, callee);
+    }
+
+    /// <summary>
+    /// Adds a discovered type to the result. Uses TryAdd semantics for partial class dedup.
+    /// </summary>
+    public void AddType(TypeInfo type)
+    {
+        _types.TryAdd(type.Id, type);
+    }
+
+    /// <summary>
+    /// Registers a class as an implementor of an interface.
+    /// Used to build the reverse index for interface "Known Implementors" sections.
+    /// </summary>
+    public void RegisterImplementor(TypeId interfaceId, TypeId classId)
+    {
+        if (!_implementors.TryGetValue(interfaceId, out var list))
+        {
+            list = new List<TypeId>();
+            _implementors[interfaceId] = list;
+        }
+        list.Add(classId);
     }
 
     /// <summary>
@@ -50,9 +74,15 @@ public sealed class AnalysisResultBuilder
     /// </summary>
     public AnalysisResult Build()
     {
+        var implementors = _implementors.ToDictionary(
+            kvp => kvp.Key,
+            kvp => (IReadOnlyList<TypeId>)kvp.Value.AsReadOnly());
+
         return new AnalysisResult(
             _methods,
             _callGraph,
+            _types,
+            implementors,
             _projectCount,
             _fileCount);
     }
