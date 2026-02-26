@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-25)
 
 **Core value:** A developer can point this tool at any C# solution and get an Obsidian vault that lets them understand what the code does, how it connects, and where the danger zones are -- without reading every file.
-**Current focus:** Phase 3 - Output Quality & Metrics
+**Current focus:** Phase 4 - Incremental Mode
 
 ## Current Position
 
-Phase: 3 of 5 (Output Quality & Metrics) -- COMPLETE
-Plan: 2 of 2 in current phase -- COMPLETE
-Status: Phase 03 complete, ready for Phase 04
-Last activity: 2026-02-26 -- Completed 03-02 (output quality, frontmatter, wikilinks, danger callouts)
+Phase: 4 of 5 (Incremental Mode)
+Plan: 1 of 3 in current phase -- COMPLETE
+Status: Executing Phase 04
+Last activity: 2026-02-26 -- Completed 04-01 (incremental infrastructure: change detection + SQLite state)
 
-Progress: [######....] 60%
+Progress: [#######...] 70%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 6
-- Average duration: 4.5 min
-- Total execution time: 0.45 hours
+- Total plans completed: 7
+- Average duration: 6.3 min
+- Total execution time: 0.73 hours
 
 **By Phase:**
 
@@ -30,10 +30,11 @@ Progress: [######....] 60%
 | 01 | 2 | 11 min | 5.5 min |
 | 02 | 2 | 8 min | 4 min |
 | 03 | 2 | 8 min | 4 min |
+| 04 | 1 | 17 min | 17 min |
 
 **Recent Trend:**
-- Last 5 plans: 02-01 (5 min), 02-02 (3 min), 03-01 (4 min), 03-02 (4 min)
-- Trend: stable
+- Last 5 plans: 02-02 (3 min), 03-01 (4 min), 03-02 (4 min), 04-01 (17 min)
+- Trend: 04-01 longer due to larger scope (6 files, 2 NuGet packages, 600+ line state class)
 
 ## Accumulated Context
 
@@ -66,6 +67,9 @@ Recent decisions affecting current work:
 - [03-02]: Pattern detection uses case-insensitive suffix matching (6 patterns: repository, controller, service, middleware, factory, handler)
 - [03-02]: Interface notes hardcode dependency_count: 0 since interfaces have no DI constructors
 - [03-02]: Type wikilinks in class body also use collision-aware resolution via ResolveTypeWikilink
+- [04-01]: LibGit2Sharp Tree+DiffTargets overload does not accept CompareOptions; working dir renames appear as Delete+Add
+- [04-01]: IncrementalState NOT IDisposable -- open-per-operation to avoid Windows file locking
+- [04-01]: Full state replacement per run (DELETE all + INSERT) rather than incremental table updates
 
 ### Pending Todos
 
@@ -78,5 +82,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-26
-Stopped at: Completed 03-02-PLAN.md (Phase 03 complete)
-Resume file: Phase 04 planning
+Stopped at: Completed 04-01-PLAN.md
+Resume file: 04-02-PLAN.md
