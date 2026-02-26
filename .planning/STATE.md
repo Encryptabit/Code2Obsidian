@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-25)
 
 **Core value:** A developer can point this tool at any C# solution and get an Obsidian vault that lets them understand what the code does, how it connects, and where the danger zones are -- without reading every file.
-**Current focus:** Phase 4 - Incremental Mode
+**Current focus:** Phase 5 - LLM Enrichment
 
 ## Current Position
 
-Phase: 4 of 5 (Incremental Mode) -- COMPLETE
-Plan: 3 of 3 in current phase -- COMPLETE
-Status: Phase 04 Complete
-Last activity: 2026-02-26 -- Completed 04-03 (CLI integration and incremental orchestration)
+Phase: 5 of 5 (LLM Enrichment)
+Plan: 1 of 3 in current phase -- COMPLETE
+Status: Executing Phase 05
+Last activity: 2026-02-26 -- Completed 05-01 (LLM infrastructure foundation)
 
-Progress: [#########.] 90%
+Progress: [##########] 93%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 9
-- Average duration: 6.9 min
-- Total execution time: 1.03 hours
+- Total plans completed: 10
+- Average duration: 7.0 min
+- Total execution time: 1.17 hours
 
 **By Phase:**
 
@@ -31,10 +31,11 @@ Progress: [#########.] 90%
 | 02 | 2 | 8 min | 4 min |
 | 03 | 2 | 8 min | 4 min |
 | 04 | 3 | 39 min | 13 min |
+| 05 | 1 | 8 min | 8 min |
 
 **Recent Trend:**
-- Last 5 plans: 03-02 (4 min), 04-01 (17 min), 04-02 (9 min), 04-03 (13 min)
-- Trend: Phase 04 averaging 13 min/plan due to integration complexity
+- Last 5 plans: 04-01 (17 min), 04-02 (9 min), 04-03 (13 min), 05-01 (8 min)
+- Trend: Phase 05 starting efficient with infrastructure-only plan
 
 ## Accumulated Context
 
@@ -79,6 +80,9 @@ Recent decisions affecting current work:
 - [04-03]: IncrementalPipeline created per-case inside RunWithProgress lambda for correct Spectre.Console progress context lifetime
 - [04-03]: State save uses full merged AnalysisResult so stored state is always a complete snapshot
 - [04-03]: All incremental orchestration in Pipeline layer (IncrementalPipeline), Program.cs only routes CLI flags (INFR-06)
+- [05-01]: Anthropic SDK 12.8.0 uses ClientOptions { ApiKey } constructor, not string constructor
+- [05-01]: Unknown LLM providers fall back to OpenAI-compatible endpoint when config.Endpoint is set
+- [05-01]: BodySource added as optional last parameter with null default to avoid breaking merger stub construction
 
 ### Pending Todos
 
@@ -86,10 +90,10 @@ None yet.
 
 ### Blockers/Concerns
 
-- Anthropic C# SDK is in beta (12.4.0) -- monitor for breaking changes during Phase 5
+- Anthropic C# SDK 12.8.0 installed and working -- constructor uses ClientOptions, not string (verified)
 
 ## Session Continuity
 
 Last session: 2026-02-26
-Stopped at: Phase 5 context gathered
-Resume file: .planning/phases/05-llm-enrichment/05-CONTEXT.md
+Stopped at: Completed 05-01-PLAN.md
+Resume file: .planning/phases/05-llm-enrichment/05-02-PLAN.md
