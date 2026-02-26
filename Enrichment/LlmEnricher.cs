@@ -19,6 +19,7 @@ public sealed class LlmEnricher : IEnricher
     private readonly LlmConfig _config;
     private readonly IProgress<PipelineProgress>? _progress;
     private readonly Func<int, int, int, decimal, bool>? _confirmEnrichment;
+    private readonly IReadOnlySet<string>? _dirtyFiles;
 
     private int _inputTokensUsed;
     private int _outputTokensUsed;
@@ -31,13 +32,15 @@ public sealed class LlmEnricher : IEnricher
         SummaryCache cache,
         LlmConfig config,
         IProgress<PipelineProgress>? progress = null,
-        Func<int, int, int, decimal, bool>? confirmEnrichment = null)
+        Func<int, int, int, decimal, bool>? confirmEnrichment = null,
+        IReadOnlySet<string>? dirtyFiles = null)
     {
         _client = client;
         _cache = cache;
         _config = config;
         _progress = progress;
         _confirmEnrichment = confirmEnrichment;
+        _dirtyFiles = dirtyFiles;
     }
 
     // Read-only accessors for reconstructing with a different IProgress
@@ -45,6 +48,7 @@ public sealed class LlmEnricher : IEnricher
     internal SummaryCache Cache => _cache;
     internal LlmConfig Config => _config;
     internal Func<int, int, int, decimal, bool>? ConfirmEnrichment => _confirmEnrichment;
+    internal IReadOnlySet<string>? DirtyFiles => _dirtyFiles;
 
     /// <summary>Human-readable name for pipeline progress display.</summary>
     public string Name => "LLM Enrichment";
@@ -67,6 +71,8 @@ public sealed class LlmEnricher : IEnricher
     /// <summary>
     /// Enriches the analysis result with LLM-generated summaries for methods and types.
     /// Cache-first: checks SummaryCache before each LLM call. Running twice on unchanged code makes zero API calls.
+    /// When dirtyFiles is set (incremental mode), only entities in dirty files are candidates for LLM calls;
+    /// unchanged entities are served from cache only and skipped if uncached.
     /// </summary>
     public async Task EnrichAsync(AnalysisResult analysis, EnrichedResult enriched, CancellationToken ct)
     {
@@ -84,10 +90,12 @@ public sealed class LlmEnricher : IEnricher
                 enriched.MethodSummaries[methodId.Value] = cached;
                 Interlocked.Increment(ref _entitiesCached);
             }
-            else
+            else if (_dirtyFiles is null || _dirtyFiles.Contains(method.FilePath))
             {
+                // Only enrich uncached entities in dirty files (or all if no dirty filter)
                 uncachedMethods.Add((method, hash));
             }
+            // else: unchanged file, uncached — skip (don't send to LLM in incremental mode)
         }
 
         // Phase 2: Partition types into cached vs uncached
@@ -102,7 +110,7 @@ public sealed class LlmEnricher : IEnricher
                 enriched.TypeSummaries[typeId.Value] = cached;
                 Interlocked.Increment(ref _entitiesCached);
             }
-            else
+            else if (_dirtyFiles is null || _dirtyFiles.Contains(type.FilePath))
             {
                 uncachedTypes.Add((type, hash));
             }

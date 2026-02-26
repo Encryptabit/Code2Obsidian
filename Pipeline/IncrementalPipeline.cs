@@ -209,17 +209,26 @@ public sealed class IncrementalPipeline
         var reanalyzedFileSet = new HashSet<string>(affectedFiles, StringComparer.OrdinalIgnoreCase);
         var mergedAnalysis = AnalysisResultMerger.Merge(freshAnalysis, state, reanalyzedFileSet);
 
-        // Enrichment pass
+        // Enrichment pass - only enrich entities in dirty files (incremental mode)
         var enrichedResult = new EnrichedResult(mergedAnalysis);
         for (int i = 0; i < _enrichers.Count; i++)
         {
             var enricher = _enrichers[i];
+            // In incremental mode, reconstruct LlmEnricher with dirty file filter
+            // so only changed/new entities are sent to the LLM
+            if (enricher is LlmEnricher llm)
+            {
+                enricher = new LlmEnricher(
+                    llm.Client, llm.Cache, llm.Config, _progress, llm.ConfirmEnrichment,
+                    dirtyFiles: reanalyzedFileSet);
+            }
             _progress?.Report(new PipelineProgress(
                 PipelineStage.Enriching,
                 $"Running {enricher.Name}...",
                 i,
                 _enrichers.Count));
             await enricher.EnrichAsync(mergedAnalysis, enrichedResult, ct);
+            result.EnrichersRun++;
         }
 
         _progress?.Report(new PipelineProgress(

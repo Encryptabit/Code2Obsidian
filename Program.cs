@@ -153,6 +153,15 @@ internal static class Program
                 var configPath = Path.Combine(Path.GetDirectoryName(solutionPath)!, "code2obsidian.llm.json");
                 var config = LlmConfigLoader.TryLoad(configPath);
 
+                // Expand env vars in CLI API key (same pattern as LlmConfigLoader)
+                if (llmApiKey is not null && llmApiKey.StartsWith('$'))
+                {
+                    var envValue = Environment.GetEnvironmentVariable(llmApiKey.Substring(1));
+                    if (!string.IsNullOrEmpty(envValue))
+                        llmApiKey = envValue;
+                    // If env var not set, leave as-is; ChatClientFactory will report the error
+                }
+
                 // Apply CLI overrides (JSON config for defaults, CLI flags override)
                 if (llmProvider is not null || llmModel is not null || llmApiKey is not null || llmEndpoint is not null)
                 {
@@ -382,9 +391,9 @@ internal static class Program
         {
             if (enricher is LlmEnricher llm)
             {
-                // Reconstruct with the live progress context
+                // Reconstruct with the live progress context (dirtyFiles set later by IncrementalPipeline if needed)
                 newLlm = new LlmEnricher(
-                    llm.Client, llm.Cache, llm.Config, progress, llm.ConfirmEnrichment);
+                    llm.Client, llm.Cache, llm.Config, progress, llm.ConfirmEnrichment, llm.DirtyFiles);
                 result.Add(newLlm);
             }
             else
