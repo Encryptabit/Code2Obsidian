@@ -12,7 +12,7 @@ Code2Obsidian is a brownfield .NET CLI with working Roslyn analysis and basic ma
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: CLI Foundation & Pipeline Architecture** - Refactor monolith into pipeline, add proper CLI parsing and progress UX
+- [x] **Phase 1: CLI Foundation & Pipeline Architecture** - Refactor monolith into pipeline, add proper CLI parsing and progress UX (completed 2026-02-26)
 - [ ] **Phase 2: Class & Type Analysis** - Generate class-level notes with inheritance, interfaces, DI, and rich method signatures
 - [ ] **Phase 3: Output Quality & Metrics** - Pattern detection, danger annotations, cyclomatic complexity, Dataview-compatible frontmatter
 - [ ] **Phase 4: Incremental Mode** - Git-based change detection with selective regeneration for large codebases
@@ -30,8 +30,8 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. The codebase is organized as IAnalyzer, IEnricher, IEmitter pipeline stages with no analysis logic in Program.cs
 **Plans**: 2 plans
 Plans:
-- [ ] 01-01-PLAN.md -- Pipeline architecture: domain models, interfaces, and ported analysis/emission logic
-- [ ] 01-02-PLAN.md -- CLI integration: System.CommandLine, Spectre.Console progress, Pipeline orchestrator, error UX
+- [x] 01-01-PLAN.md -- Pipeline architecture: domain models, interfaces, and ported analysis/emission logic
+- [x] 01-02-PLAN.md -- CLI integration: System.CommandLine, Spectre.Console progress, Pipeline orchestrator, error UX
 
 ### Phase 2: Class & Type Analysis
 **Goal**: Every class and interface in the analyzed solution gets its own Obsidian note with structural context -- inheritance, interfaces, members, DI dependencies, and rich method signatures
@@ -86,7 +86,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. CLI Foundation & Pipeline Architecture | 0/2 | Planned | - |
+| 1. CLI Foundation & Pipeline Architecture | 2/2 | Complete | 2026-02-26 |
 | 2. Class & Type Analysis | 0/? | Not started | - |
 | 3. Output Quality & Metrics | 0/? | Not started | - |
 | 4. Incremental Mode | 0/? | Not started | - |
