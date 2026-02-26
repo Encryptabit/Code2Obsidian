@@ -103,6 +103,10 @@ public sealed class Pipeline
         result.NotesGenerated = emitResult.NotesWritten;
         result.Warnings.AddRange(emitResult.Warnings);
 
+        // Expose analysis and emission results for state saving in incremental mode
+        result.AnalysisResult = analysisResult;
+        result.EmitResult = emitResult;
+
         progress?.Report(new PipelineProgress(
             PipelineStage.Emitting,
             "Emission complete",

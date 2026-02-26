@@ -4,6 +4,7 @@ using Code2Obsidian.Analysis;
 using Code2Obsidian.Analysis.Analyzers;
 using Code2Obsidian.Emission;
 using Code2Obsidian.Enrichment;
+using Code2Obsidian.Incremental;
 using Code2Obsidian.Loading;
 using Code2Obsidian.Pipeline;
 using Spectre.Console;
@@ -103,87 +104,99 @@ internal static class Program
 
             using var context = await loader.LoadAsync(solutionPath, ct);
 
-            // TODO: Task 2 will add IncrementalPipeline routing for incremental/fullRebuild/dryRun flags.
-            // For now, all paths use the standard full pipeline.
+            PipelineResult result;
 
-            // Compose pipeline (no DI container in Phase 1)
-            var analyzers = new List<IAnalyzer> { new MethodAnalyzer(), new TypeAnalyzer() };
-            var enrichers = new List<IEnricher>();
-            var emitter = new ObsidianEmitter(fanInThreshold, complexityThreshold);
-            var pipeline = new Pipeline.Pipeline(analyzers, enrichers, emitter);
+            if (incremental || fullRebuild || dryRun)
+            {
+                // Incremental mode: delegate to IncrementalPipeline
+                var stateDbPath = Path.Combine(outputDir, ".code2obsidian-state.db");
+                var state = new IncrementalState(stateDbPath);
 
-            // Run pipeline with Spectre.Console progress
-            PipelineResult result = null!;
+                // IncrementalPipeline is created per-case with the correct progress reporter.
+                // The Spectre.Console ProgressContext is created inside RunWithProgress.
 
-            await AnsiConsole.Progress()
-                .Columns(
-                    new TaskDescriptionColumn(),
-                    new ProgressBarColumn(),
-                    new PercentageColumn(),
-                    new SpinnerColumn(),
-                    new ElapsedTimeColumn())
-                .StartAsync(async ctx =>
+                if (fullRebuild)
                 {
-                    var analysisTask = ctx.AddTask("Analyzing...", maxValue: 1);
-                    var enrichmentTask = ctx.AddTask("Enriching...", maxValue: 1);
-                    enrichmentTask.IsIndeterminate = true;
-                    var emissionTask = ctx.AddTask("Emitting...", maxValue: 1);
-                    emissionTask.IsIndeterminate = true;
-
-                    var progress = new Progress<PipelineProgress>(p =>
+                    // Case D: --full-rebuild -> wipe state, run full analysis with state save
+                    state.DeleteState();
+                    AnsiConsole.MarkupLine("[yellow]State wiped. Performing full analysis.[/]");
+                    result = await RunWithProgress(ctx =>
                     {
-                        switch (p.Stage)
-                        {
-                            case PipelineStage.Analyzing:
-                                analysisTask.Description = p.Description;
-                                if (p.Total > 0)
-                                {
-                                    analysisTask.MaxValue = p.Total;
-                                    analysisTask.Value = p.Current;
-                                }
-                                break;
-
-                            case PipelineStage.Enriching:
-                                enrichmentTask.IsIndeterminate = false;
-                                enrichmentTask.Description = p.Description;
-                                if (p.Total > 0)
-                                {
-                                    enrichmentTask.MaxValue = p.Total;
-                                    enrichmentTask.Value = p.Current;
-                                }
-                                break;
-
-                            case PipelineStage.Emitting:
-                                emissionTask.IsIndeterminate = false;
-                                emissionTask.Description = p.Description;
-                                if (p.Total > 0)
-                                {
-                                    emissionTask.MaxValue = p.Total;
-                                    emissionTask.Value = p.Current;
-                                }
-                                break;
-                        }
+                        var progress = CreateProgress(ctx);
+                        var incPipeline = new IncrementalPipeline(
+                            context, progress, outputDir, stateDbPath, fanInThreshold, complexityThreshold);
+                        return incPipeline.RunFullWithStateSaveAsync(ct);
                     });
+                    result.WasIncremental = false;
+                }
+                else if (dryRun)
+                {
+                    // Case E: --dry-run -> show what would change
+                    if (!state.TryLoad(out _))
+                    {
+                        AnsiConsole.MarkupLine("[yellow]No prior state found. Dry run requires a previous incremental run.[/]");
+                        AnsiConsole.MarkupLine("[yellow]Run with --incremental first to establish state.[/]");
+                        return 1;
+                    }
 
-                    result = await pipeline.RunAsync(context, outputDir, progress, ct);
+                    result = await RunWithProgress(ctx =>
+                    {
+                        var progress = CreateProgress(ctx);
+                        var incPipeline = new IncrementalPipeline(
+                            context, progress, outputDir, stateDbPath, fanInThreshold, complexityThreshold);
+                        return incPipeline.RunDryRunAsync(state, ct);
+                    });
+                    result.WasIncremental = true;
+                }
+                else
+                {
+                    // --incremental flag
+                    if (!state.TryLoad(out _))
+                    {
+                        // Case B: no prior state -> full analysis with state save
+                        AnsiConsole.MarkupLine("[yellow]No prior state found. Performing full analysis and saving state.[/]");
+                        result = await RunWithProgress(ctx =>
+                        {
+                            var progress = CreateProgress(ctx);
+                            var incPipeline = new IncrementalPipeline(
+                                context, progress, outputDir, stateDbPath, fanInThreshold, complexityThreshold);
+                            return incPipeline.RunFullWithStateSaveAsync(ct);
+                        });
+                        result.WasIncremental = true;
+                    }
+                    else
+                    {
+                        // Case C: prior state exists -> run incremental
+                        result = await RunWithProgress(ctx =>
+                        {
+                            var progress = CreateProgress(ctx);
+                            var incPipeline = new IncrementalPipeline(
+                                context, progress, outputDir, stateDbPath, fanInThreshold, complexityThreshold);
+                            return incPipeline.RunIncrementalAsync(state, ct);
+                        });
+                        result.WasIncremental = true;
+                    }
+                }
 
-                    // Mark all tasks complete
-                    analysisTask.Value = analysisTask.MaxValue;
-                    enrichmentTask.Value = enrichmentTask.MaxValue;
-                    emissionTask.Value = emissionTask.MaxValue;
-                });
+                IncrementalPipeline.EnsureGitignore(outputDir);
+            }
+            else
+            {
+                // Case A: no incremental flags -> full analysis via existing Pipeline (no state)
+                result = await RunFullPipeline(context, outputDir, fanInThreshold, complexityThreshold, ct);
+            }
 
             // Add loader diagnostics as warnings BEFORE rendering
             if (loader.Diagnostics.Count > 0)
             {
-                result!.Warnings.AddRange(loader.Diagnostics);
+                result.Warnings.AddRange(loader.Diagnostics);
             }
 
             // Display end-of-run summary (after progress context closes)
-            RenderSummary(result!);
+            RenderSummary(result);
 
             // Display warnings after summary
-            if (result!.Warnings.Count > 0)
+            if (result.Warnings.Count > 0)
             {
                 AnsiConsole.MarkupLine($"\n[yellow]{result.Warnings.Count} warning(s):[/]");
                 foreach (var warning in result.Warnings)
@@ -217,6 +230,151 @@ internal static class Program
             AnsiConsole.MarkupLine($"[red]Fatal error:[/] {Markup.Escape(ex.Message)}");
             return 2;
         }
+    }
+
+    /// <summary>
+    /// Runs the full pipeline (non-incremental Case A) with Spectre.Console progress.
+    /// </summary>
+    private static async Task<PipelineResult> RunFullPipeline(
+        AnalysisContext context, string outputDir, int fanInThreshold, int complexityThreshold, CancellationToken ct)
+    {
+        var analyzers = new List<IAnalyzer> { new MethodAnalyzer(), new TypeAnalyzer() };
+        var enrichers = new List<IEnricher>();
+        var emitter = new ObsidianEmitter(fanInThreshold, complexityThreshold);
+        var pipeline = new Pipeline.Pipeline(analyzers, enrichers, emitter);
+
+        PipelineResult result = null!;
+
+        await AnsiConsole.Progress()
+            .Columns(
+                new TaskDescriptionColumn(),
+                new ProgressBarColumn(),
+                new PercentageColumn(),
+                new SpinnerColumn(),
+                new ElapsedTimeColumn())
+            .StartAsync(async ctx =>
+            {
+                var analysisTask = ctx.AddTask("Analyzing...", maxValue: 1);
+                var enrichmentTask = ctx.AddTask("Enriching...", maxValue: 1);
+                enrichmentTask.IsIndeterminate = true;
+                var emissionTask = ctx.AddTask("Emitting...", maxValue: 1);
+                emissionTask.IsIndeterminate = true;
+
+                var progress = new Progress<PipelineProgress>(p =>
+                {
+                    switch (p.Stage)
+                    {
+                        case PipelineStage.Analyzing:
+                            analysisTask.Description = p.Description;
+                            if (p.Total > 0)
+                            {
+                                analysisTask.MaxValue = p.Total;
+                                analysisTask.Value = p.Current;
+                            }
+                            break;
+
+                        case PipelineStage.Enriching:
+                            enrichmentTask.IsIndeterminate = false;
+                            enrichmentTask.Description = p.Description;
+                            if (p.Total > 0)
+                            {
+                                enrichmentTask.MaxValue = p.Total;
+                                enrichmentTask.Value = p.Current;
+                            }
+                            break;
+
+                        case PipelineStage.Emitting:
+                            emissionTask.IsIndeterminate = false;
+                            emissionTask.Description = p.Description;
+                            if (p.Total > 0)
+                            {
+                                emissionTask.MaxValue = p.Total;
+                                emissionTask.Value = p.Current;
+                            }
+                            break;
+                    }
+                });
+
+                result = await pipeline.RunAsync(context, outputDir, progress, ct);
+
+                // Mark all tasks complete
+                analysisTask.Value = analysisTask.MaxValue;
+                enrichmentTask.Value = enrichmentTask.MaxValue;
+                emissionTask.Value = emissionTask.MaxValue;
+            });
+
+        return result;
+    }
+
+    /// <summary>
+    /// Runs an async operation within a Spectre.Console progress context.
+    /// Used for incremental pipeline operations that manage their own progress reporting.
+    /// </summary>
+    private static async Task<PipelineResult> RunWithProgress(
+        Func<ProgressContext, Task<PipelineResult>> operation)
+    {
+        PipelineResult result = null!;
+
+        await AnsiConsole.Progress()
+            .Columns(
+                new TaskDescriptionColumn(),
+                new ProgressBarColumn(),
+                new PercentageColumn(),
+                new SpinnerColumn(),
+                new ElapsedTimeColumn())
+            .StartAsync(async ctx =>
+            {
+                result = await operation(ctx);
+            });
+
+        return result;
+    }
+
+    /// <summary>
+    /// Creates a pipeline progress reporter from a Spectre.Console progress context.
+    /// </summary>
+    private static IProgress<PipelineProgress> CreateProgress(ProgressContext ctx)
+    {
+        var analysisTask = ctx.AddTask("Analyzing...", maxValue: 1);
+        var enrichmentTask = ctx.AddTask("Enriching...", maxValue: 1);
+        enrichmentTask.IsIndeterminate = true;
+        var emissionTask = ctx.AddTask("Emitting...", maxValue: 1);
+        emissionTask.IsIndeterminate = true;
+
+        return new Progress<PipelineProgress>(p =>
+        {
+            switch (p.Stage)
+            {
+                case PipelineStage.Analyzing:
+                    analysisTask.Description = p.Description;
+                    if (p.Total > 0)
+                    {
+                        analysisTask.MaxValue = p.Total;
+                        analysisTask.Value = p.Current;
+                    }
+                    break;
+
+                case PipelineStage.Enriching:
+                    enrichmentTask.IsIndeterminate = false;
+                    enrichmentTask.Description = p.Description;
+                    if (p.Total > 0)
+                    {
+                        enrichmentTask.MaxValue = p.Total;
+                        enrichmentTask.Value = p.Current;
+                    }
+                    break;
+
+                case PipelineStage.Emitting:
+                    emissionTask.IsIndeterminate = false;
+                    emissionTask.Description = p.Description;
+                    if (p.Total > 0)
+                    {
+                        emissionTask.MaxValue = p.Total;
+                        emissionTask.Value = p.Current;
+                    }
+                    break;
+            }
+        });
     }
 
     #region Path Resolution
