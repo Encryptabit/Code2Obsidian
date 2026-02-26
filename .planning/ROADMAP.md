@@ -43,7 +43,10 @@ Plans:
   3. Interface notes include a "Known Implementors" section with wikilinks to all classes that implement that interface
   4. Constructor parameters are listed with their types and linked as dependency injection dependencies
   5. Method signatures in all notes include return type, parameter names with types, and access modifiers
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 02-01-PLAN.md -- Domain models (TypeInfo, PropertyFieldInfo, ConstructorInfo, ParameterInfo), TypeAnalyzer, rich method signatures
+- [ ] 02-02-PLAN.md -- Class/interface note emission in ObsidianEmitter, pipeline wiring
 
 ### Phase 3: Output Quality & Metrics
 **Goal**: The generated vault uses collision-free wikilinks, rich YAML frontmatter with computed metrics, pattern-based tags, and danger annotations that flag risky methods
@@ -87,7 +90,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. CLI Foundation & Pipeline Architecture | 2/2 | Complete | 2026-02-26 |
-| 2. Class & Type Analysis | 0/? | Not started | - |
+| 2. Class & Type Analysis | 0/2 | In progress | - |
 | 3. Output Quality & Metrics | 0/? | Not started | - |
 | 4. Incremental Mode | 0/? | Not started | - |
 | 5. LLM Enrichment | 0/? | Not started | - |

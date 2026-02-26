@@ -40,8 +40,28 @@
       "artifact_hash": "d33a33a82e7a689f534ddb043a750ec0e9b38e1da640cbd305e96fc80b4b4963",
       "note": null,
       "recorded_at": "2026-02-26T04:44:17.305Z"
+    },
+    {
+      "entry_id": "1772083336089-6f4kcf",
+      "gate": "discuss",
+      "phase": "2",
+      "review_id": "76a96e35-26af-4371-a014-cf508eccd15f",
+      "status": "approved",
+      "artifact_hash": "3a121739aa02f8d754bacab2045114bc876af2a16a428c0ed4c037178de89a2f",
+      "note": null,
+      "recorded_at": "2026-02-26T05:22:16.089Z"
+    },
+    {
+      "entry_id": "1772084507468-84gvv2",
+      "gate": "plan",
+      "phase": "2",
+      "review_id": null,
+      "status": "approved",
+      "artifact_hash": null,
+      "note": null,
+      "recorded_at": "2026-02-26T05:41:47.468Z"
     }
   ],
   "overrides": [],
-  "updated_at": "2026-02-26T04:44:17.306Z"
+  "updated_at": "2026-02-26T05:41:47.469Z"
 }
