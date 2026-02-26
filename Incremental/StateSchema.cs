@@ -33,6 +33,38 @@ public static class StateSchema
         {
             MigrateToV1(connection);
         }
+
+        if (version < 2)
+        {
+            MigrateToV2(connection);
+        }
+    }
+
+    /// <summary>
+    /// Adds the summaries table for LLM enrichment caching.
+    /// Existing V1 tables are untouched; IF NOT EXISTS ensures idempotency.
+    /// </summary>
+    private static void MigrateToV2(SqliteConnection connection)
+    {
+        using var transaction = connection.BeginTransaction();
+
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            CREATE TABLE IF NOT EXISTS summaries (
+                entity_id TEXT PRIMARY KEY,
+                content_hash TEXT NOT NULL,
+                summary_text TEXT NOT NULL,
+                model_id TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_summaries_hash ON summaries(content_hash);
+
+            PRAGMA user_version = 2;
+            """;
+
+        cmd.ExecuteNonQuery();
+        transaction.Commit();
     }
 
     /// <summary>

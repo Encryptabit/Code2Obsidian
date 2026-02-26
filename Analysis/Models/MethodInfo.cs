@@ -15,5 +15,6 @@ public sealed record MethodInfo(
     string Namespace,
     string ProjectName,
     string AccessModifier,
-    int CyclomaticComplexity
+    int CyclomaticComplexity,
+    string? BodySource = null
 );

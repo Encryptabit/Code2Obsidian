@@ -107,6 +107,12 @@ public sealed class MethodAnalyzer : IAnalyzer
                         ? TypeId.FromSymbol(containingType)
                         : new TypeId("global");
 
+                    // Extract body source for content hashing (LLM cache invalidation)
+                    var bodySource = declaration.Body?.ToFullString()
+                        ?? (declaration is MethodDeclarationSyntax methodDecl
+                            ? methodDecl.ExpressionBody?.ToFullString()
+                            : null);
+
                     var methodInfo = new Models.MethodInfo(
                         Id: methodId,
                         Name: symbol.Name,
@@ -118,7 +124,8 @@ public sealed class MethodAnalyzer : IAnalyzer
                         Namespace: containingType?.ContainingNamespace?.ToDisplayString() ?? "",
                         ProjectName: project.Name,
                         AccessModifier: AnalysisHelpers.AccessibilityToString(symbol.DeclaredAccessibility),
-                        CyclomaticComplexity: AnalysisHelpers.ComputeCyclomaticComplexity(declaration)
+                        CyclomaticComplexity: AnalysisHelpers.ComputeCyclomaticComplexity(declaration),
+                        BodySource: bodySource
                     );
 
                     builder.AddMethod(methodInfo);

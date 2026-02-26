@@ -13,6 +13,18 @@ public sealed class EnrichedResult
     /// </summary>
     public AnalysisResult Analysis { get; }
 
+    /// <summary>
+    /// LLM-generated summaries for methods, keyed by MethodId.Value.
+    /// Empty when --enrich is not used; emitter renders no Summary section in that case.
+    /// </summary>
+    public Dictionary<string, string> MethodSummaries { get; } = new();
+
+    /// <summary>
+    /// LLM-generated summaries for types, keyed by TypeId.Value.
+    /// Empty when --enrich is not used; emitter renders no Summary section in that case.
+    /// </summary>
+    public Dictionary<string, string> TypeSummaries { get; } = new();
+
     public EnrichedResult(AnalysisResult analysis)
     {
         Analysis = analysis;
