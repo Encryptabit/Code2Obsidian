@@ -28,7 +28,6 @@ Decimal phases appear between their surrounding integers in numeric order.
   1. Running `Code2Obsidian --help` displays auto-generated help with all flags and arguments
   2. Running analysis on a multi-project solution shows a progress bar that updates as projects and files are processed
   3. The codebase is organized as IAnalyzer, IEnricher, IEmitter pipeline stages with no analysis logic in Program.cs
-  4. Existing functionality (method-level markdown, call graphs, wikilinks) continues to work identically after refactor
 **Plans**: TBD
 
 ### Phase 2: Class & Type Analysis
