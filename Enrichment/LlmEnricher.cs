@@ -1,3 +1,4 @@
+﻿using System.Text.RegularExpressions;
 using Code2Obsidian.Analysis;
 using Code2Obsidian.Analysis.Models;
 using Code2Obsidian.Enrichment.Config;
@@ -205,8 +206,9 @@ public sealed class LlmEnricher : IEnricher
             if (response.Usage?.OutputTokenCount is long outputTokens)
                 Interlocked.Add(ref _outputTokensUsed, (int)outputTokens);
 
-            _cache.Put(method.Id.Value, hash, summary, _config.Model);
-            enriched.MethodSummaries[method.Id.Value] = summary;
+            var enrichmentResponse = ParseXmlResponse(summary);
+            _cache.Put(method.Id.Value, hash, enrichmentResponse, _config.Model);
+            enriched.MethodSummaries[method.Id.Value] = enrichmentResponse;
             Interlocked.Increment(ref _entitiesEnriched);
 
             var completed = EntitiesCached + EntitiesEnriched + EntitiesFailed;
@@ -261,8 +263,9 @@ public sealed class LlmEnricher : IEnricher
             if (response.Usage?.OutputTokenCount is long outputTokens)
                 Interlocked.Add(ref _outputTokensUsed, (int)outputTokens);
 
-            _cache.Put(type.Id.Value, hash, summary, _config.Model);
-            enriched.TypeSummaries[type.Id.Value] = summary;
+            var enrichmentResponse = ParseXmlResponse(summary);
+            _cache.Put(type.Id.Value, hash, enrichmentResponse, _config.Model);
+            enriched.TypeSummaries[type.Id.Value] = enrichmentResponse;
             Interlocked.Increment(ref _entitiesEnriched);
 
             var completed = EntitiesCached + EntitiesEnriched + EntitiesFailed;
@@ -281,6 +284,26 @@ public sealed class LlmEnricher : IEnricher
         {
             semaphore.Release();
         }
+    }
+
+    /// <summary>
+    /// Parses structured XML response from the LLM into an EnrichmentResponse.
+    /// Extracts summary, purpose, and tags from XML tags. Falls back gracefully
+    /// if tags are missing: summary defaults to full text, purpose to empty, tags to empty array.
+    /// </summary>
+    private static EnrichmentResponse ParseXmlResponse(string text)
+    {
+        var summaryMatch = Regex.Match(text, @"<summary>(.*?)</summary>", RegexOptions.Singleline);
+        var purposeMatch = Regex.Match(text, @"<purpose>(.*?)</purpose>", RegexOptions.Singleline);
+        var tagsMatch = Regex.Match(text, @"<tags>(.*?)</tags>", RegexOptions.Singleline);
+
+        var summary = summaryMatch.Success ? summaryMatch.Groups[1].Value.Trim() : text.Trim();
+        var purpose = purposeMatch.Success ? purposeMatch.Groups[1].Value.Trim() : "";
+        var tags = tagsMatch.Success
+            ? tagsMatch.Groups[1].Value.Split(',').Select(t => t.Trim()).Where(t => t.Length > 0).ToArray()
+            : Array.Empty<string>();
+
+        return new EnrichmentResponse(summary, purpose, tags);
     }
 
     private void ReportProgress(string description, int current, int total)

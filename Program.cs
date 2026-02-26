@@ -1,5 +1,6 @@
-using System.CommandLine;
+﻿using System.CommandLine;
 using System.CommandLine.Parsing;
+using System.Diagnostics;
 using Code2Obsidian.Analysis;
 using Code2Obsidian.Analysis.Analyzers;
 using Code2Obsidian.Emission;
@@ -10,6 +11,7 @@ using Code2Obsidian.Loading;
 using Code2Obsidian.Pipeline;
 using Microsoft.Extensions.AI;
 using Spectre.Console;
+using Spectre.Console.Rendering;
 
 namespace Code2Obsidian;
 
@@ -215,16 +217,9 @@ internal static class Program
                 var stateDbPath = Path.Combine(outputDir, ".code2obsidian-state.db");
                 var cache = new SummaryCache(stateDbPath);
 
-                // Create confirmation lambda for cost estimation
-                Func<int, int, int, decimal, bool> confirmEnrichment = (count, inTokens, outTokens, cost) =>
-                {
-                    AnsiConsole.MarkupLine($"[yellow]Enrichment will process {count} entities[/]");
-                    AnsiConsole.MarkupLine($"[yellow]Estimated: ~{inTokens + outTokens:N0} tokens (~${cost:F4})[/]");
-                    return AnsiConsole.Confirm("Proceed with LLM enrichment?", defaultValue: true);
-                };
-
                 // Create LlmEnricher (progress wired per execution case)
-                llmEnricher = new LlmEnricher(client, cache, config, progress: null, confirmEnrichment: confirmEnrichment);
+                // No confirmation prompt: --enrich flag is explicit user consent
+                llmEnricher = new LlmEnricher(client, cache, config, progress: null, confirmEnrichment: null);
                 enrichers.Add(llmEnricher);
 
                 AnsiConsole.MarkupLine($"[green]LLM enrichment enabled:[/] {config.Provider}/{config.Model}");
@@ -532,6 +527,82 @@ internal static class Program
             }
         });
     }
+
+    #region Progress Display
+
+    private sealed class StageState
+    {
+        public string Description { get; set; } = "";
+        public int Current { get; set; }
+        public int Total { get; set; }
+        public Stopwatch Timer { get; } = new();
+    }
+
+    private sealed class ProgressState
+    {
+        // Stages: 0=Analyzing, 1=Enriching, 2=Emitting
+        public StageState[] Stages { get; } = { new(), new(), new() };
+
+        public void Update(PipelineProgress p)
+        {
+            var index = p.Stage switch
+            {
+                PipelineStage.Analyzing => 0,
+                PipelineStage.Enriching => 1,
+                PipelineStage.Emitting => 2,
+                _ => -1
+            };
+
+            if (index < 0) return;
+
+            var stage = Stages[index];
+            stage.Description = p.Description;
+            stage.Current = p.Current;
+            stage.Total = p.Total;
+
+            if (!stage.Timer.IsRunning && p.Total > 0)
+                stage.Timer.Start();
+
+            // Stop timer when stage completes
+            if (p.Current >= p.Total && p.Total > 0)
+                stage.Timer.Stop();
+        }
+    }
+
+    private static IRenderable RenderProgressDisplay(ProgressState state)
+    {
+        const int barWidth = 40;
+        var rows = new List<IRenderable>();
+
+        for (var i = 0; i < state.Stages.Length; i++)
+        {
+            var stage = state.Stages[i];
+            if (stage.Total <= 0) continue;
+
+            var pct = stage.Total > 0 ? (double)stage.Current / stage.Total : 0;
+            var filled = (int)(pct * barWidth);
+            var empty = barWidth - filled;
+
+            var filledBar = new string('━', filled);
+            var emptyBar = new string('━', empty);
+            var pctText = $"{pct * 100,4:F0}%";
+            var elapsed = stage.Timer.Elapsed.ToString(@"hh\:mm\:ss");
+
+            // Line 1: Description
+            rows.Add(new Markup($"  {Markup.Escape(stage.Description)}"));
+            // Line 2: Bar + percentage + elapsed
+            rows.Add(new Markup($"  [green]{filledBar}[/][grey]{emptyBar}[/] {pctText}  {elapsed}"));
+            // Blank line between stages
+            rows.Add(new Text(""));
+        }
+
+        if (rows.Count == 0)
+            return new Text("Starting...");
+
+        return new Rows(rows);
+    }
+
+    #endregion
 
     #region Path Resolution
 

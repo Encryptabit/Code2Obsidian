@@ -19,7 +19,8 @@ public static class ChatClientFactory
     {
         ["anthropic"] = CreateAnthropicClient,
         ["openai"] = CreateOpenAIClient,
-        ["ollama"] = CreateOllamaClient
+        ["ollama"] = CreateOllamaClient,
+        ["codex"] = CreateCodexClient
     };
 
     /// <summary>
@@ -86,5 +87,17 @@ public static class ChatClientFactory
         var options = new OpenAIClientOptions { Endpoint = new Uri(config.Endpoint!) };
         var client = new OpenAIClient(credential, options);
         return client.GetChatClient(config.Model).AsIChatClient();
+    }
+
+    private static IChatClient CreateCodexClient(LlmConfig config, string _)
+    {
+        var endpoint = config.Endpoint ?? "ws://localhost:8080";
+        if (!endpoint.StartsWith("ws://", StringComparison.OrdinalIgnoreCase) &&
+            !endpoint.StartsWith("wss://", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Codex endpoint must use ws:// or wss:// scheme, got: '{endpoint}'");
+        }
+        return new CodexChatClient(new Uri(endpoint), config.Model);
     }
 }
