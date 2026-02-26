@@ -28,7 +28,10 @@ Decimal phases appear between their surrounding integers in numeric order.
   1. Running `Code2Obsidian --help` displays auto-generated help with all flags and arguments
   2. Running analysis on a multi-project solution shows a progress bar that updates as projects and files are processed
   3. The codebase is organized as IAnalyzer, IEnricher, IEmitter pipeline stages with no analysis logic in Program.cs
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 01-01-PLAN.md -- Pipeline architecture: domain models, interfaces, and ported analysis/emission logic
+- [ ] 01-02-PLAN.md -- CLI integration: System.CommandLine, Spectre.Console progress, Pipeline orchestrator, error UX
 
 ### Phase 2: Class & Type Analysis
 **Goal**: Every class and interface in the analyzed solution gets its own Obsidian note with structural context -- inheritance, interfaces, members, DI dependencies, and rich method signatures
@@ -83,7 +86,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. CLI Foundation & Pipeline Architecture | 0/? | Not started | - |
+| 1. CLI Foundation & Pipeline Architecture | 0/2 | Planned | - |
 | 2. Class & Type Analysis | 0/? | Not started | - |
 | 3. Output Quality & Metrics | 0/? | Not started | - |
 | 4. Incremental Mode | 0/? | Not started | - |

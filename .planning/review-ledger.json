@@ -10,8 +10,18 @@
       "artifact_hash": "917c21bec3594d2e37489c1cbe6be3c393051c027dc991748905787dd2d33ebc",
       "note": null,
       "recorded_at": "2026-02-26T02:47:53.998Z"
+    },
+    {
+      "entry_id": "1772075119906-ujy3hu",
+      "gate": "plan",
+      "phase": "1",
+      "review_id": null,
+      "status": "approved",
+      "artifact_hash": null,
+      "note": null,
+      "recorded_at": "2026-02-26T03:05:19.906Z"
     }
   ],
   "overrides": [],
-  "updated_at": "2026-02-26T02:47:53.999Z"
+  "updated_at": "2026-02-26T03:05:19.906Z"
 }
