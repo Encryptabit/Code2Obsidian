@@ -10,28 +10,28 @@ See: .planning/PROJECT.md (updated 2026-02-25)
 ## Current Position
 
 Phase: 1 of 5 (CLI Foundation & Pipeline Architecture)
-Plan: 1 of 2 in current phase
-Status: Plan 01-01 complete, ready for 01-02
-Last activity: 2026-02-26 -- Plan 01-01 executed (pipeline architecture extraction)
+Plan: 2 of 2 in current phase
+Status: Phase 01 complete -- all plans executed
+Last activity: 2026-02-26 -- Plan 01-02 executed (CLI shell and pipeline wiring)
 
-Progress: [#.........] 10%
+Progress: [##........] 20%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 1
-- Average duration: 5 min
-- Total execution time: 0.08 hours
+- Total plans completed: 2
+- Average duration: 5.5 min
+- Total execution time: 0.18 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 01 | 1 | 5 min | 5 min |
+| 01 | 2 | 11 min | 5.5 min |
 
 **Recent Trend:**
-- Last 5 plans: 01-01 (5 min)
-- Trend: baseline
+- Last 5 plans: 01-01 (5 min), 01-02 (6 min)
+- Trend: stable
 
 ## Accumulated Context
 
@@ -47,6 +47,9 @@ Recent decisions affecting current work:
 - [01-01]: Merged CallGraphAnalyzer into MethodAnalyzer to avoid double iteration over syntax trees
 - [01-01]: Assembly name strings instead of IAssemblySymbol references for user-method filtering
 - [01-01]: Per-method emission mode as default for Phase 1
+- [01-02]: Pipeline reports progress through IProgress<PipelineProgress> abstraction (no Spectre.Console dependency in Pipeline)
+- [01-02]: System.CommandLine SetAction with Func<ParseResult, CancellationToken, Task<int>> for async exit code return
+- [01-02]: Exit code convention: 0 = clean success, 1 = success with warnings, 2 = fatal error
 
 ### Pending Todos
 
@@ -59,5 +62,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-26
-Stopped at: Completed 01-01-PLAN.md (pipeline architecture extraction)
-Resume file: .planning/phases/01-cli-foundation-pipeline-architecture/01-02-PLAN.md
+Stopped at: Completed 01-02-PLAN.md (CLI shell and pipeline wiring) -- Phase 01 complete
+Resume file: Next phase planning required
