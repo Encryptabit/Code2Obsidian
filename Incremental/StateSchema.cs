@@ -38,6 +38,11 @@ public static class StateSchema
         {
             MigrateToV2(connection);
         }
+
+        if (version < 3)
+        {
+            MigrateToV3(connection);
+        }
     }
 
     /// <summary>
@@ -54,8 +59,8 @@ public static class StateSchema
                 entity_id TEXT PRIMARY KEY,
                 content_hash TEXT NOT NULL,
                 summary TEXT NOT NULL,
-                purpose TEXT NOT NULL,
-                tags TEXT NOT NULL,
+                purpose TEXT NOT NULL DEFAULT '',
+                tags TEXT NOT NULL DEFAULT '',
                 model_id TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
@@ -66,6 +71,69 @@ public static class StateSchema
             """;
 
         cmd.ExecuteNonQuery();
+        transaction.Commit();
+    }
+
+    /// <summary>
+    /// Migrates V2 summaries table (with summary_text column) to V3 schema
+    /// (with separate summary, purpose, tags columns). Handles both old V2
+    /// databases (summary_text) and fresh V2 databases (already have new columns).
+    /// </summary>
+    private static void MigrateToV3(SqliteConnection connection)
+    {
+        using var transaction = connection.BeginTransaction();
+
+        // Check if old summary_text column exists (pre-05.1 V2 schema)
+        bool hasSummaryTextColumn = false;
+        using (var pragmaCmd = connection.CreateCommand())
+        {
+            pragmaCmd.CommandText = "PRAGMA table_info(summaries)";
+            using var reader = pragmaCmd.ExecuteReader();
+            while (reader.Read())
+            {
+                if (reader.GetString(1) == "summary_text")
+                {
+                    hasSummaryTextColumn = true;
+                    break;
+                }
+            }
+        }
+
+        if (hasSummaryTextColumn)
+        {
+            // Old V2 schema: rename table, create new, migrate data, drop old
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = """
+                ALTER TABLE summaries RENAME TO summaries_old;
+
+                CREATE TABLE summaries (
+                    entity_id TEXT PRIMARY KEY,
+                    content_hash TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    purpose TEXT NOT NULL DEFAULT '',
+                    tags TEXT NOT NULL DEFAULT '',
+                    model_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                INSERT INTO summaries (entity_id, content_hash, summary, purpose, tags, model_id, created_at)
+                SELECT entity_id, content_hash, summary_text, '', '', model_id, created_at
+                FROM summaries_old;
+
+                DROP TABLE summaries_old;
+
+                CREATE INDEX IF NOT EXISTS idx_summaries_hash ON summaries(content_hash);
+                """;
+            cmd.ExecuteNonQuery();
+        }
+
+        // Bump version to 3 regardless (fresh V2 databases already have correct columns)
+        using (var versionCmd = connection.CreateCommand())
+        {
+            versionCmd.CommandText = "PRAGMA user_version = 3";
+            versionCmd.ExecuteNonQuery();
+        }
+
         transaction.Commit();
     }
 
