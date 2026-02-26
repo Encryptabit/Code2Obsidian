@@ -48,24 +48,22 @@ public sealed class ObsidianEmitter : IEmitter
 
         Directory.CreateDirectory(outputDirectory);
 
-        // Build collision set: short class names that appear more than once across different namespaces
+        // Build collision set and overload index for disambiguation
         var collisionSet = BuildCollisionSet(analysis);
+        var overloadIndex = BuildOverloadIndex(analysis);
 
         // Emit method notes
         foreach (var (methodId, method) in analysis.Methods)
         {
             ct.ThrowIfCancellationRequested();
 
-            var shortClassName = GetShortClassName(method.ContainingTypeName);
-            var noteBaseName = IsCollision(shortClassName, collisionSet)
-                ? $"{method.ContainingTypeName}.{method.Name}"
-                : $"{shortClassName}.{method.Name}";
+            var noteBaseName = ResolveMethodNoteName(method, collisionSet, overloadIndex);
             var fileName = Sanitize($"{noteBaseName}.md");
             var filePath = Path.Combine(outputDirectory, fileName);
 
             try
             {
-                var content = RenderMethodNote(method, analysis, collisionSet);
+                var content = RenderMethodNote(method, analysis, collisionSet, overloadIndex);
                 await File.WriteAllTextAsync(filePath, content, ct);
                 notesWritten++;
             }
@@ -90,8 +88,8 @@ public sealed class ObsidianEmitter : IEmitter
             try
             {
                 var content = typeInfo.Kind == TypeKindInfo.Interface
-                    ? RenderInterfaceNote(typeInfo, analysis, collisionSet)
-                    : RenderClassNote(typeInfo, analysis, collisionSet);
+                    ? RenderInterfaceNote(typeInfo, analysis, collisionSet, overloadIndex)
+                    : RenderClassNote(typeInfo, analysis, collisionSet, overloadIndex);
                 await File.WriteAllTextAsync(filePath, content, ct);
                 notesWritten++;
             }
@@ -105,45 +103,106 @@ public sealed class ObsidianEmitter : IEmitter
     }
 
     /// <summary>
-    /// Builds a set of short class names that appear more than once across different namespaces.
-    /// When a short name collides, wikilinks and file names must use the namespace-qualified form.
+    /// Builds a set of short class names that appear more than once across different
+    /// fully-qualified containing types. This catches collisions from different namespaces
+    /// AND nested types under different outers that share a short name.
     /// </summary>
     private static HashSet<string> BuildCollisionSet(AnalysisResult analysis)
     {
-        // Map short name -> set of namespaces it appears in
-        var nameToNamespaces = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        // Map short name -> set of fully-qualified type names (not just namespace)
+        var nameToFullNames = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
 
         foreach (var typeInfo in analysis.Types.Values)
         {
             var shortName = typeInfo.Name;
-            if (!nameToNamespaces.TryGetValue(shortName, out var namespaces))
+            if (!nameToFullNames.TryGetValue(shortName, out var fullNames))
             {
-                namespaces = new HashSet<string>(StringComparer.Ordinal);
-                nameToNamespaces[shortName] = namespaces;
+                fullNames = new HashSet<string>(StringComparer.Ordinal);
+                nameToFullNames[shortName] = fullNames;
             }
-            namespaces.Add(typeInfo.Namespace);
+            fullNames.Add(typeInfo.FullName);
         }
 
         // Also scan methods for containing type names that might not have their own TypeInfo
         foreach (var method in analysis.Methods.Values)
         {
             var shortName = GetShortClassName(method.ContainingTypeName);
-            if (!nameToNamespaces.TryGetValue(shortName, out var namespaces))
+            if (!nameToFullNames.TryGetValue(shortName, out var fullNames))
             {
-                namespaces = new HashSet<string>(StringComparer.Ordinal);
-                nameToNamespaces[shortName] = namespaces;
+                fullNames = new HashSet<string>(StringComparer.Ordinal);
+                nameToFullNames[shortName] = fullNames;
             }
-            namespaces.Add(method.Namespace);
+            fullNames.Add(method.ContainingTypeName);
         }
 
         var collisionSet = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var (shortName, namespaces) in nameToNamespaces)
+        foreach (var (shortName, fullNames) in nameToFullNames)
         {
-            if (namespaces.Count > 1)
+            if (fullNames.Count > 1)
                 collisionSet.Add(shortName);
         }
 
         return collisionSet;
+    }
+
+    /// <summary>
+    /// Builds an index mapping each MethodId to an overload suffix (or null if unique).
+    /// When multiple methods share the same ClassName.MethodName, they get suffixed with
+    /// _2, _3, etc. (first occurrence gets no suffix for backward compatibility).
+    /// </summary>
+    private static Dictionary<MethodId, string?> BuildOverloadIndex(AnalysisResult analysis)
+    {
+        // Group methods by their base note name (short class name + method name)
+        var groups = new Dictionary<string, List<MethodId>>(StringComparer.Ordinal);
+
+        foreach (var (methodId, method) in analysis.Methods)
+        {
+            var shortClassName = GetShortClassName(method.ContainingTypeName);
+            var baseName = $"{shortClassName}.{method.Name}";
+            if (!groups.TryGetValue(baseName, out var list))
+            {
+                list = new List<MethodId>();
+                groups[baseName] = list;
+            }
+            list.Add(methodId);
+        }
+
+        var index = new Dictionary<MethodId, string?>();
+        foreach (var (_, methodIds) in groups)
+        {
+            if (methodIds.Count == 1)
+            {
+                index[methodIds[0]] = null; // no suffix needed
+            }
+            else
+            {
+                // Sort by MethodId.Value for deterministic ordering
+                methodIds.Sort((a, b) => string.Compare(a.Value, b.Value, StringComparison.Ordinal));
+                index[methodIds[0]] = null; // first overload gets no suffix
+                for (int i = 1; i < methodIds.Count; i++)
+                {
+                    index[methodIds[i]] = $"_{i + 1}";
+                }
+            }
+        }
+
+        return index;
+    }
+
+    /// <summary>
+    /// Resolves the note base name for a method, including collision and overload disambiguation.
+    /// </summary>
+    private static string ResolveMethodNoteName(MethodInfo method, HashSet<string> collisionSet, Dictionary<MethodId, string?> overloadIndex)
+    {
+        var shortClassName = GetShortClassName(method.ContainingTypeName);
+        var baseName = IsCollision(shortClassName, collisionSet)
+            ? $"{method.ContainingTypeName}.{method.Name}"
+            : $"{shortClassName}.{method.Name}";
+
+        if (overloadIndex.TryGetValue(method.Id, out var suffix) && suffix is not null)
+            baseName += suffix;
+
+        return baseName;
     }
 
     /// <summary>
@@ -182,7 +241,7 @@ public sealed class ObsidianEmitter : IEmitter
     /// Renders a complete markdown note for a single method with expanded YAML frontmatter,
     /// danger callouts for high-risk methods, header, signature, doc comment, and call graph links.
     /// </summary>
-    private string RenderMethodNote(MethodInfo method, AnalysisResult analysis, HashSet<string> collisionSet)
+    private string RenderMethodNote(MethodInfo method, AnalysisResult analysis, HashSet<string> collisionSet, Dictionary<MethodId, string?> overloadIndex)
     {
         var sb = new StringBuilder();
         var callGraph = analysis.CallGraph;
@@ -195,7 +254,7 @@ public sealed class ObsidianEmitter : IEmitter
         sb.AppendLine("---");
         sb.AppendLine($"namespace: \"{method.Namespace}\"");
         sb.AppendLine($"project: \"{method.ProjectName}\"");
-        sb.AppendLine($"source_file: \"{method.FilePath}\"");
+        sb.AppendLine($"source_file: \"{NormalizePath(method.FilePath)}\"");
         sb.AppendLine($"access_modifier: \"{method.AccessModifier}\"");
         sb.AppendLine($"complexity: {method.CyclomaticComplexity}");
         sb.AppendLine($"fan_in: {fanIn}");
@@ -211,7 +270,7 @@ public sealed class ObsidianEmitter : IEmitter
         // Header
         var shortClassName = GetShortClassName(method.ContainingTypeName);
         sb.AppendLine($"# {shortClassName}::{method.Name}");
-        sb.AppendLine($"**Path**: `{method.FilePath}`");
+        sb.AppendLine($"**Path**: `{NormalizePath(method.FilePath)}`");
         sb.AppendLine();
 
         // Danger callouts (before method section)
@@ -230,7 +289,7 @@ public sealed class ObsidianEmitter : IEmitter
         }
 
         // Method section (signature, doc, calls)
-        sb.Append(RenderMethodSection(method, analysis, collisionSet));
+        sb.Append(RenderMethodSection(method, analysis, collisionSet, overloadIndex));
 
         return sb.ToString();
     }
@@ -239,16 +298,13 @@ public sealed class ObsidianEmitter : IEmitter
     /// Renders a method section with signature, doc comment, and call graph links.
     /// Uses collision-free wikilinks: default [[ClassName.MethodName]], fallback [[Namespace.ClassName.MethodName]].
     /// </summary>
-    private static string RenderMethodSection(MethodInfo method, AnalysisResult analysis, HashSet<string> collisionSet)
+    private static string RenderMethodSection(MethodInfo method, AnalysisResult analysis, HashSet<string> collisionSet, Dictionary<MethodId, string?> overloadIndex)
     {
         var sb = new StringBuilder();
         var callGraph = analysis.CallGraph;
 
-        // Self-link header with collision-aware wikilink
-        var shortClassName = GetShortClassName(method.ContainingTypeName);
-        var selfLink = IsCollision(shortClassName, collisionSet)
-            ? Sanitize($"{method.ContainingTypeName}.{method.Name}")
-            : Sanitize($"{shortClassName}.{method.Name}");
+        // Self-link header with collision and overload-aware wikilink
+        var selfLink = Sanitize(ResolveMethodNoteName(method, collisionSet, overloadIndex));
 
         sb.AppendLine();
         sb.AppendLine($"#### [[{selfLink}]]");
@@ -281,7 +337,7 @@ public sealed class ObsidianEmitter : IEmitter
             sb.AppendLine("**Calls ->**");
             foreach (var callee in callees.OrderBy(c => c.Value))
             {
-                var wikilink = ResolveMethodWikilink(callee, analysis, collisionSet);
+                var wikilink = ResolveMethodWikilink(callee, analysis, collisionSet, overloadIndex);
                 sb.AppendLine($"- [[{wikilink}]]");
             }
             sb.AppendLine();
@@ -294,7 +350,7 @@ public sealed class ObsidianEmitter : IEmitter
             sb.AppendLine("**Called-by <-**");
             foreach (var caller in callers.OrderBy(c => c.Value))
             {
-                var wikilink = ResolveMethodWikilink(caller, analysis, collisionSet);
+                var wikilink = ResolveMethodWikilink(caller, analysis, collisionSet, overloadIndex);
                 sb.AppendLine($"- [[{wikilink}]]");
             }
             sb.AppendLine();
@@ -308,14 +364,11 @@ public sealed class ObsidianEmitter : IEmitter
     /// Default: ClassName.MethodName. Fallback for collisions: Namespace.ClassName.MethodName.
     /// Falls back to ExtractMethodName for external methods not in the analysis.
     /// </summary>
-    private static string ResolveMethodWikilink(MethodId methodId, AnalysisResult analysis, HashSet<string> collisionSet)
+    private static string ResolveMethodWikilink(MethodId methodId, AnalysisResult analysis, HashSet<string> collisionSet, Dictionary<MethodId, string?> overloadIndex)
     {
         if (analysis.Methods.TryGetValue(methodId, out var methodInfo))
         {
-            var shortClassName = GetShortClassName(methodInfo.ContainingTypeName);
-            return IsCollision(shortClassName, collisionSet)
-                ? Sanitize($"{methodInfo.ContainingTypeName}.{methodInfo.Name}")
-                : Sanitize($"{shortClassName}.{methodInfo.Name}");
+            return Sanitize(ResolveMethodNoteName(methodInfo, collisionSet, overloadIndex));
         }
 
         // External method: fall back to just the method name
@@ -356,7 +409,7 @@ public sealed class ObsidianEmitter : IEmitter
     /// Includes expanded YAML frontmatter with pattern detection, purpose summary,
     /// inheritance wikilinks, DI dependencies, properties/fields, and member index.
     /// </summary>
-    private static string RenderClassNote(TypeInfo typeInfo, AnalysisResult analysis, HashSet<string> collisionSet)
+    private static string RenderClassNote(TypeInfo typeInfo, AnalysisResult analysis, HashSet<string> collisionSet, Dictionary<MethodId, string?> overloadIndex)
     {
         var sb = new StringBuilder();
 
@@ -379,7 +432,7 @@ public sealed class ObsidianEmitter : IEmitter
         sb.AppendLine("---");
         sb.AppendLine($"namespace: \"{typeInfo.Namespace}\"");
         sb.AppendLine($"project: \"{typeInfo.ProjectName}\"");
-        sb.AppendLine($"source_file: \"{typeInfo.FilePath}\"");
+        sb.AppendLine($"source_file: \"{NormalizePath(typeInfo.FilePath)}\"");
         sb.AppendLine($"access_modifier: \"{typeInfo.AccessModifier}\"");
         sb.AppendLine(typeInfo.BaseClassFullName is not null
             ? $"base_class: \"{typeInfo.BaseClassFullName}\""
@@ -422,7 +475,7 @@ public sealed class ObsidianEmitter : IEmitter
         sb.AppendLine();
 
         // Source path
-        sb.AppendLine($"**Path**: `{typeInfo.FilePath}`");
+        sb.AppendLine($"**Path**: `{NormalizePath(typeInfo.FilePath)}`");
         sb.AppendLine();
 
         // Type relationships
@@ -497,7 +550,7 @@ public sealed class ObsidianEmitter : IEmitter
             {
                 if (analysis.Methods.TryGetValue(methodId, out var methodInfo))
                 {
-                    var wikilink = ResolveMethodWikilink(methodId, analysis, collisionSet);
+                    var wikilink = ResolveMethodWikilink(methodId, analysis, collisionSet, overloadIndex);
                     sb.AppendLine($"- [[{wikilink}]]");
                 }
             }
@@ -512,7 +565,7 @@ public sealed class ObsidianEmitter : IEmitter
     /// Same structure as class notes, but includes "Known Implementors" section
     /// and sets dependency_count to 0 (interfaces have no constructors with DI).
     /// </summary>
-    private static string RenderInterfaceNote(TypeInfo typeInfo, AnalysisResult analysis, HashSet<string> collisionSet)
+    private static string RenderInterfaceNote(TypeInfo typeInfo, AnalysisResult analysis, HashSet<string> collisionSet, Dictionary<MethodId, string?> overloadIndex)
     {
         var sb = new StringBuilder();
 
@@ -526,7 +579,7 @@ public sealed class ObsidianEmitter : IEmitter
         sb.AppendLine("---");
         sb.AppendLine($"namespace: \"{typeInfo.Namespace}\"");
         sb.AppendLine($"project: \"{typeInfo.ProjectName}\"");
-        sb.AppendLine($"source_file: \"{typeInfo.FilePath}\"");
+        sb.AppendLine($"source_file: \"{NormalizePath(typeInfo.FilePath)}\"");
         sb.AppendLine($"access_modifier: \"{typeInfo.AccessModifier}\"");
         sb.AppendLine(typeInfo.BaseClassFullName is not null
             ? $"base_class: \"{typeInfo.BaseClassFullName}\""
@@ -569,7 +622,7 @@ public sealed class ObsidianEmitter : IEmitter
         sb.AppendLine();
 
         // Source path
-        sb.AppendLine($"**Path**: `{typeInfo.FilePath}`");
+        sb.AppendLine($"**Path**: `{NormalizePath(typeInfo.FilePath)}`");
         sb.AppendLine();
 
         // Type relationships (interfaces can extend other interfaces)
@@ -613,7 +666,7 @@ public sealed class ObsidianEmitter : IEmitter
             {
                 if (analysis.Methods.TryGetValue(methodId, out var methodInfo))
                 {
-                    var wikilink = ResolveMethodWikilink(methodId, analysis, collisionSet);
+                    var wikilink = ResolveMethodWikilink(methodId, analysis, collisionSet, overloadIndex);
                     sb.AppendLine($"- [[{wikilink}]]");
                 }
             }
@@ -644,6 +697,26 @@ public sealed class ObsidianEmitter : IEmitter
         }
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Normalizes an absolute file path to a forward-slash relative path.
+    /// Strips drive letters and converts backslashes to forward slashes for cross-platform frontmatter.
+    /// </summary>
+    private static string NormalizePath(string filePath)
+    {
+        // Replace backslashes with forward slashes
+        var normalized = filePath.Replace('\\', '/');
+
+        // Strip drive letter prefix (e.g., "C:/Users/..." -> "Users/...")
+        if (normalized.Length >= 3 && normalized[1] == ':' && normalized[2] == '/')
+            normalized = normalized.Substring(3);
+
+        // Strip leading slash if present (from Unix absolute paths)
+        if (normalized.StartsWith('/'))
+            normalized = normalized.Substring(1);
+
+        return normalized;
     }
 
     /// <summary>
