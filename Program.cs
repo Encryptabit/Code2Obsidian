@@ -24,18 +24,34 @@ internal static class Program
             Description = "Output directory for the Obsidian vault (default: <solution-dir>/vault/)"
         };
 
+        var fanInThresholdOption = new Option<int>("--fan-in-threshold")
+        {
+            Description = "Fan-in threshold for danger tagging (default: 10)",
+            DefaultValueFactory = _ => 10
+        };
+
+        var complexityThresholdOption = new Option<int>("--complexity-threshold")
+        {
+            Description = "Cyclomatic complexity threshold for danger tagging (default: 15)",
+            DefaultValueFactory = _ => 15
+        };
+
         var rootCommand = new RootCommand("Analyze a C# solution and generate an Obsidian vault")
         {
             inputArgument,
-            outputOption
+            outputOption,
+            fanInThresholdOption,
+            complexityThresholdOption
         };
 
         rootCommand.SetAction(async (parseResult, cancellationToken) =>
         {
             var input = parseResult.GetValue(inputArgument)!;
             var output = parseResult.GetValue(outputOption);
+            var fanInThreshold = parseResult.GetValue(fanInThresholdOption);
+            var complexityThreshold = parseResult.GetValue(complexityThresholdOption);
 
-            return await RunPipelineAsync(input, output, cancellationToken);
+            return await RunPipelineAsync(input, output, fanInThreshold, complexityThreshold, cancellationToken);
         });
 
         var parseResult = rootCommand.Parse(args);
@@ -43,7 +59,7 @@ internal static class Program
     }
 
     private static async Task<int> RunPipelineAsync(
-        string input, string? output, CancellationToken ct)
+        string input, string? output, int fanInThreshold, int complexityThreshold, CancellationToken ct)
     {
         try
         {
@@ -67,7 +83,7 @@ internal static class Program
             // Compose pipeline (no DI container in Phase 1)
             var analyzers = new List<IAnalyzer> { new MethodAnalyzer(), new TypeAnalyzer() };
             var enrichers = new List<IEnricher>();
-            var emitter = new ObsidianEmitter();
+            var emitter = new ObsidianEmitter(fanInThreshold, complexityThreshold);
             var pipeline = new Pipeline.Pipeline(analyzers, enrichers, emitter);
 
             // Run pipeline with Spectre.Console progress
