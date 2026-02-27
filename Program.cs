@@ -1,6 +1,7 @@
 ﻿using System.CommandLine;
 using System.CommandLine.Parsing;
 using System.Diagnostics;
+using System.Net.WebSockets;
 using Code2Obsidian.Analysis;
 using Code2Obsidian.Analysis.Analyzers;
 using Code2Obsidian.Emission;
@@ -309,6 +310,61 @@ internal static class Program
                     {
                         AnsiConsole.MarkupLine(
                             $"[yellow]Adjusted maxConcurrency to[/] {adjustedConcurrency} to match pool size.");
+                    }
+                }
+
+                if (config.Provider.Equals("codex", StringComparison.OrdinalIgnoreCase))
+                {
+                    var configuredEndpoints = GetConfiguredEndpoints(config);
+                    var (reachable, unreachable) = await ProbeCodexEndpointsAsync(configuredEndpoints, ct);
+
+                    if (reachable.Count == 0)
+                    {
+                        AnsiConsole.MarkupLine("[red]Error:[/] No reachable Codex websocket endpoints were found.");
+                        if (poolSize is null)
+                        {
+                            AnsiConsole.MarkupLine(
+                                "[yellow]Tip:[/] Start Codex app-server instances manually, or pass [bold]--pool-size N[/] to launch a local pool.");
+                        }
+
+                        foreach (var failed in unreachable.Take(3))
+                        {
+                            AnsiConsole.MarkupLine(
+                                $"  [grey]{Markup.Escape(failed.endpoint)}[/]: {Markup.Escape(failed.error)}");
+                        }
+                        if (unreachable.Count > 3)
+                        {
+                            AnsiConsole.MarkupLine($"  [grey]...and {unreachable.Count - 3} more endpoint probe failures[/]");
+                        }
+                        return 1;
+                    }
+
+                    if (unreachable.Count > 0)
+                    {
+                        AnsiConsole.MarkupLine(
+                            $"[yellow]Warning:[/] {unreachable.Count} Codex endpoint(s) unreachable; using {reachable.Count} reachable endpoint(s).");
+                        foreach (var failed in unreachable.Take(3))
+                        {
+                            AnsiConsole.MarkupLine(
+                                $"  [grey]{Markup.Escape(failed.endpoint)}[/]: {Markup.Escape(failed.error)}");
+                        }
+                        if (unreachable.Count > 3)
+                        {
+                            AnsiConsole.MarkupLine($"  [grey]...and {unreachable.Count - 3} more endpoint probe failures[/]");
+                        }
+
+                        config = config with
+                        {
+                            Endpoint = reachable[0],
+                            Endpoints = reachable.Count > 1 ? reachable.Skip(1).ToArray() : null
+                        };
+
+                        if (config.MaxConcurrency > reachable.Count)
+                        {
+                            config = config with { MaxConcurrency = reachable.Count };
+                            AnsiConsole.MarkupLine(
+                                $"[yellow]Adjusted maxConcurrency to[/] {reachable.Count} to match reachable endpoints.");
+                        }
                     }
                 }
 
@@ -857,6 +913,59 @@ internal static class Program
     private static int CountConfiguredEndpoints(LlmConfig config)
     {
         return GetConfiguredEndpoints(config).Count;
+    }
+
+    private static async Task<(List<string> reachable, List<(string endpoint, string error)> unreachable)> ProbeCodexEndpointsAsync(
+        IReadOnlyList<string> endpoints,
+        CancellationToken ct)
+    {
+        var reachable = new List<string>();
+        var unreachable = new List<(string endpoint, string error)>();
+
+        foreach (var endpoint in endpoints)
+        {
+            if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var uri))
+            {
+                unreachable.Add((endpoint, "Invalid endpoint URI."));
+                continue;
+            }
+
+            try
+            {
+                using var ws = new ClientWebSocket();
+                using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                connectCts.CancelAfter(TimeSpan.FromSeconds(1));
+                await ws.ConnectAsync(uri, connectCts.Token);
+                reachable.Add(endpoint);
+
+                try
+                {
+                    using var closeCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
+                    await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "probe", closeCts.Token);
+                }
+                catch
+                {
+                    // Best effort close; successful connect already established reachability.
+                }
+            }
+            catch (Exception ex) when (IsCodexProbeException(ex, ct))
+            {
+                unreachable.Add((endpoint, ex.Message));
+            }
+        }
+
+        return (reachable, unreachable);
+    }
+
+    private static bool IsCodexProbeException(Exception ex, CancellationToken outerToken)
+    {
+        if (ex is OperationCanceledException && outerToken.IsCancellationRequested)
+            return false;
+
+        return ex is OperationCanceledException
+            or WebSocketException
+            or HttpRequestException
+            or InvalidOperationException;
     }
 
     /// <summary>
