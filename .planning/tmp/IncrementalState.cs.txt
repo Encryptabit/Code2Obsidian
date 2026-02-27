@@ -1,0 +1,616 @@
+using Microsoft.Data.Sqlite;
+
+namespace Code2Obsidian.Incremental;
+
+/// <summary>
+/// Manages SQLite-backed incremental state persistence.
+/// Connections are opened and closed per operation (not held open during pipeline).
+/// Missing or corrupted state triggers silent full rebuild (INFR-05).
+/// </summary>
+public sealed class IncrementalState
+{
+    /// <summary>
+    /// Absolute path to the .code2obsidian-state.db file.
+    /// </summary>
+    public string DbPath { get; }
+
+    /// <summary>
+    /// The commit SHA from the last successful run, set by <see cref="TryLoad"/>.
+    /// </summary>
+    public string? CommitSha { get; private set; }
+
+    public IncrementalState(string dbPath)
+    {
+        DbPath = dbPath;
+    }
+
+    // -----------------------------------------------------------------------
+    //  Read methods
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Attempts to load the state database.
+    /// Returns false if the DB does not exist or is corrupt (silent full rebuild per INFR-05).
+    /// On success, sets <see cref="CommitSha"/> and outputs the stored commit SHA.
+    /// </summary>
+    public bool TryLoad(out string? commitSha)
+    {
+        commitSha = null;
+
+        try
+        {
+            if (!File.Exists(DbPath))
+                return false;
+
+            using var connection = OpenConnection();
+            StateSchema.EnsureSchema(connection);
+
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT commit_sha FROM run_state WHERE id = 1";
+
+            var result = cmd.ExecuteScalar();
+            commitSha = result as string;
+            CommitSha = commitSha;
+            return true;
+        }
+        catch
+        {
+            // ANY exception = treat as corrupt/missing -> full rebuild.
+            CommitSha = null;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Returns stored file_path to content_hash mapping.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> GetFileHashes()
+    {
+        try
+        {
+            using var connection = OpenConnection();
+            StateSchema.EnsureSchema(connection);
+
+            var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT file_path, content_hash FROM file_hashes";
+
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                result[reader.GetString(0)] = reader.GetString(1);
+            }
+
+            return result;
+        }
+        catch (SqliteException)
+        {
+            return new Dictionary<string, string>();
+        }
+    }
+
+    /// <summary>
+    /// Returns all stored call edges.
+    /// </summary>
+    public IReadOnlyList<(string CallerId, string CalleeId, string CallerFile, string CalleeFile)> GetCallEdges()
+    {
+        try
+        {
+            using var connection = OpenConnection();
+            StateSchema.EnsureSchema(connection);
+
+            var result = new List<(string, string, string, string)>();
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT caller_id, callee_id, caller_file, callee_file FROM call_edges";
+
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                result.Add((reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3)));
+            }
+
+            return result;
+        }
+        catch (SqliteException)
+        {
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// Returns all type reference entries.
+    /// </summary>
+    public IReadOnlyList<(string TypeId, string FilePath)> GetTypeReferences()
+    {
+        try
+        {
+            using var connection = OpenConnection();
+            StateSchema.EnsureSchema(connection);
+
+            var result = new List<(string, string)>();
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT type_id, file_path FROM type_references";
+
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                result.Add((reader.GetString(0), reader.GetString(1)));
+            }
+
+            return result;
+        }
+        catch (SqliteException)
+        {
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// Returns all type-to-file mappings (for partial class support).
+    /// </summary>
+    public IReadOnlyList<(string TypeId, string FilePath)> GetTypeFiles()
+    {
+        try
+        {
+            using var connection = OpenConnection();
+            StateSchema.EnsureSchema(connection);
+
+            var result = new List<(string, string)>();
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT type_id, file_path FROM type_files";
+
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                result.Add((reader.GetString(0), reader.GetString(1)));
+            }
+
+            return result;
+        }
+        catch (SqliteException)
+        {
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// Returns note_path to (source_file, entity_id) mapping.
+    /// </summary>
+    public IReadOnlyDictionary<string, (string SourceFile, string EntityId)> GetEmittedNotes()
+    {
+        try
+        {
+            using var connection = OpenConnection();
+            StateSchema.EnsureSchema(connection);
+
+            var result = new Dictionary<string, (string, string)>(StringComparer.OrdinalIgnoreCase);
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT note_path, source_file, entity_id FROM emitted_notes";
+
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                result[reader.GetString(0)] = (reader.GetString(1), reader.GetString(2));
+            }
+
+            return result;
+        }
+        catch (SqliteException)
+        {
+            return new Dictionary<string, (string, string)>();
+        }
+    }
+
+    /// <summary>
+    /// Returns the set of caller_ids for a given callee_id (one-hop reverse lookup).
+    /// </summary>
+    public IReadOnlySet<string> GetCallers(string methodId)
+    {
+        try
+        {
+            using var connection = OpenConnection();
+            StateSchema.EnsureSchema(connection);
+
+            var result = new HashSet<string>(StringComparer.Ordinal);
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT caller_id FROM call_edges WHERE callee_id = @calleeId";
+            cmd.Parameters.AddWithValue("@calleeId", methodId);
+
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                result.Add(reader.GetString(0));
+            }
+
+            return result;
+        }
+        catch (SqliteException)
+        {
+            return new HashSet<string>();
+        }
+    }
+
+    /// <summary>
+    /// Returns the set of callee_ids for a given caller_id.
+    /// </summary>
+    public IReadOnlySet<string> GetCallees(string methodId)
+    {
+        try
+        {
+            using var connection = OpenConnection();
+            StateSchema.EnsureSchema(connection);
+
+            var result = new HashSet<string>(StringComparer.Ordinal);
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT callee_id FROM call_edges WHERE caller_id = @callerId";
+            cmd.Parameters.AddWithValue("@callerId", methodId);
+
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                result.Add(reader.GetString(0));
+            }
+
+            return result;
+        }
+        catch (SqliteException)
+        {
+            return new HashSet<string>();
+        }
+    }
+
+    /// <summary>
+    /// Looks up the file path for a method from the call_edges table (returns first match).
+    /// </summary>
+    public string? GetFileForMethod(string methodId)
+    {
+        try
+        {
+            using var connection = OpenConnection();
+            StateSchema.EnsureSchema(connection);
+
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT caller_file FROM call_edges WHERE caller_id = @methodId LIMIT 1";
+            cmd.Parameters.AddWithValue("@methodId", methodId);
+
+            return cmd.ExecuteScalar() as string;
+        }
+        catch (SqliteException)
+        {
+            return null;
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    //  Metadata read methods (for plan 04-02 consumers)
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Returns type_id to (base_class, interfaces, namespace) from type_metadata table.
+    /// Used by RippleCalculator for structural change detection.
+    /// </summary>
+    public IReadOnlyDictionary<string, (string? BaseClass, string Interfaces, string Namespace)> GetTypeMetadata()
+    {
+        try
+        {
+            using var connection = OpenConnection();
+            StateSchema.EnsureSchema(connection);
+
+            var result = new Dictionary<string, (string?, string, string)>(StringComparer.Ordinal);
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT type_id, base_class, interfaces, namespace FROM type_metadata";
+
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                var typeId = reader.GetString(0);
+                var baseClass = reader.IsDBNull(1) ? null : reader.GetString(1);
+                var interfaces = reader.GetString(2);
+                var ns = reader.GetString(3);
+                result[typeId] = (baseClass, interfaces, ns);
+            }
+
+            return result;
+        }
+        catch (SqliteException)
+        {
+            return new Dictionary<string, (string?, string, string)>();
+        }
+    }
+
+    /// <summary>
+    /// Returns method_id to (containing_type, file_path) from method_index table.
+    /// Used by AnalysisResultMerger for collision-safe wikilinks.
+    /// </summary>
+    public IReadOnlyDictionary<string, (string ContainingType, string FilePath)> GetMethodIndex()
+    {
+        try
+        {
+            using var connection = OpenConnection();
+            StateSchema.EnsureSchema(connection);
+
+            var result = new Dictionary<string, (string, string)>(StringComparer.Ordinal);
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT method_id, containing_type, file_path FROM method_index";
+
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                result[reader.GetString(0)] = (reader.GetString(1), reader.GetString(2));
+            }
+
+            return result;
+        }
+        catch (SqliteException)
+        {
+            return new Dictionary<string, (string, string)>();
+        }
+    }
+
+    /// <summary>
+    /// Returns type_id to (name, full_name, file_path, kind) from type_index table.
+    /// Used by AnalysisResultMerger for collision detection.
+    /// </summary>
+    public IReadOnlyDictionary<string, (string Name, string FullName, string FilePath, string Kind)> GetTypeIndex()
+    {
+        try
+        {
+            using var connection = OpenConnection();
+            StateSchema.EnsureSchema(connection);
+
+            var result = new Dictionary<string, (string, string, string, string)>(StringComparer.Ordinal);
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT type_id, name, full_name, file_path, kind FROM type_index";
+
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                result[reader.GetString(0)] = (reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4));
+            }
+
+            return result;
+        }
+        catch (SqliteException)
+        {
+            return new Dictionary<string, (string, string, string, string)>();
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    //  Write methods
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Saves complete state to SQLite in a single transaction (full state replacement per run).
+    /// </summary>
+    public void SaveState(
+        string? commitSha,
+        IReadOnlyDictionary<string, string> fileHashes,
+        IReadOnlyList<(string CallerId, string CalleeId, string CallerFile, string CalleeFile)> callEdges,
+        IReadOnlyList<(string TypeId, string FilePath)> typeReferences,
+        IReadOnlyList<(string TypeId, string FilePath)> typeFiles,
+        IReadOnlyDictionary<string, (string SourceFile, string EntityId)> emittedNotes,
+        IReadOnlyList<(string TypeId, string? BaseClass, string Interfaces, string Namespace)> typeMetadata,
+        IReadOnlyList<(string MethodId, string ContainingType, string FilePath)> methodIndex,
+        IReadOnlyList<(string TypeId, string Name, string FullName, string FilePath, string Kind)> typeIndex)
+    {
+        // Ensure parent directory exists.
+        var dir = Path.GetDirectoryName(DbPath);
+        if (dir is not null)
+            Directory.CreateDirectory(dir);
+
+        using var connection = OpenConnection();
+        StateSchema.EnsureSchema(connection);
+
+        using var transaction = connection.BeginTransaction();
+
+        // Delete all rows from all 9 tables (full state replacement).
+        using (var cmd = connection.CreateCommand())
+        {
+            cmd.CommandText = "DELETE FROM run_state; DELETE FROM file_hashes; DELETE FROM call_edges; DELETE FROM type_references; DELETE FROM type_files; DELETE FROM emitted_notes; DELETE FROM type_metadata; DELETE FROM method_index; DELETE FROM type_index;";
+            cmd.ExecuteNonQuery();
+        }
+
+        // INSERT run_state.
+        using (var cmd = connection.CreateCommand())
+        {
+            cmd.CommandText = "INSERT INTO run_state (id, commit_sha, run_timestamp) VALUES (1, @sha, @ts)";
+            cmd.Parameters.AddWithValue("@sha", (object?)commitSha ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@ts", DateTime.UtcNow.ToString("o"));
+            cmd.ExecuteNonQuery();
+        }
+
+        // INSERT file hashes.
+        InsertFileHashes(connection, fileHashes);
+        InsertCallEdges(connection, callEdges);
+        InsertTypeReferences(connection, typeReferences);
+        InsertTypeFiles(connection, typeFiles);
+        InsertEmittedNotes(connection, emittedNotes);
+        InsertTypeMetadata(connection, typeMetadata);
+        InsertMethodIndex(connection, methodIndex);
+        InsertTypeIndex(connection, typeIndex);
+
+        transaction.Commit();
+    }
+
+    // -----------------------------------------------------------------------
+    //  Delete method
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Deletes the state database and associated WAL/SHM files.
+    /// Used by --full-rebuild.
+    /// </summary>
+    public void DeleteState()
+    {
+        TryDeleteFile(DbPath);
+        TryDeleteFile(DbPath + "-wal");
+        TryDeleteFile(DbPath + "-shm");
+    }
+
+    // -----------------------------------------------------------------------
+    //  Private insert helpers
+    // -----------------------------------------------------------------------
+
+    private static void InsertFileHashes(SqliteConnection connection, IReadOnlyDictionary<string, string> fileHashes)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "INSERT INTO file_hashes (file_path, content_hash) VALUES (@path, @hash)";
+        var pathParam = cmd.Parameters.Add("@path", SqliteType.Text);
+        var hashParam = cmd.Parameters.Add("@hash", SqliteType.Text);
+
+        foreach (var (path, hash) in fileHashes)
+        {
+            pathParam.Value = path;
+            hashParam.Value = hash;
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    private static void InsertCallEdges(SqliteConnection connection, IReadOnlyList<(string CallerId, string CalleeId, string CallerFile, string CalleeFile)> callEdges)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "INSERT INTO call_edges (caller_id, callee_id, caller_file, callee_file) VALUES (@callerId, @calleeId, @callerFile, @calleeFile)";
+        var callerIdParam = cmd.Parameters.Add("@callerId", SqliteType.Text);
+        var calleeIdParam = cmd.Parameters.Add("@calleeId", SqliteType.Text);
+        var callerFileParam = cmd.Parameters.Add("@callerFile", SqliteType.Text);
+        var calleeFileParam = cmd.Parameters.Add("@calleeFile", SqliteType.Text);
+
+        foreach (var (callerId, calleeId, callerFile, calleeFile) in callEdges)
+        {
+            callerIdParam.Value = callerId;
+            calleeIdParam.Value = calleeId;
+            callerFileParam.Value = callerFile;
+            calleeFileParam.Value = calleeFile;
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    private static void InsertTypeReferences(SqliteConnection connection, IReadOnlyList<(string TypeId, string FilePath)> typeReferences)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "INSERT INTO type_references (type_id, file_path) VALUES (@typeId, @filePath)";
+        var typeIdParam = cmd.Parameters.Add("@typeId", SqliteType.Text);
+        var filePathParam = cmd.Parameters.Add("@filePath", SqliteType.Text);
+
+        foreach (var (typeId, filePath) in typeReferences)
+        {
+            typeIdParam.Value = typeId;
+            filePathParam.Value = filePath;
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    private static void InsertTypeFiles(SqliteConnection connection, IReadOnlyList<(string TypeId, string FilePath)> typeFiles)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "INSERT INTO type_files (type_id, file_path) VALUES (@typeId, @filePath)";
+        var typeIdParam = cmd.Parameters.Add("@typeId", SqliteType.Text);
+        var filePathParam = cmd.Parameters.Add("@filePath", SqliteType.Text);
+
+        foreach (var (typeId, filePath) in typeFiles)
+        {
+            typeIdParam.Value = typeId;
+            filePathParam.Value = filePath;
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    private static void InsertEmittedNotes(SqliteConnection connection, IReadOnlyDictionary<string, (string SourceFile, string EntityId)> emittedNotes)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "INSERT INTO emitted_notes (note_path, source_file, entity_id) VALUES (@notePath, @sourceFile, @entityId)";
+        var notePathParam = cmd.Parameters.Add("@notePath", SqliteType.Text);
+        var sourceFileParam = cmd.Parameters.Add("@sourceFile", SqliteType.Text);
+        var entityIdParam = cmd.Parameters.Add("@entityId", SqliteType.Text);
+
+        foreach (var (notePath, (sourceFile, entityId)) in emittedNotes)
+        {
+            notePathParam.Value = notePath;
+            sourceFileParam.Value = sourceFile;
+            entityIdParam.Value = entityId;
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    private static void InsertTypeMetadata(SqliteConnection connection, IReadOnlyList<(string TypeId, string? BaseClass, string Interfaces, string Namespace)> typeMetadata)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "INSERT INTO type_metadata (type_id, base_class, interfaces, namespace) VALUES (@typeId, @baseClass, @interfaces, @ns)";
+        var typeIdParam = cmd.Parameters.Add("@typeId", SqliteType.Text);
+        var baseClassParam = cmd.Parameters.Add("@baseClass", SqliteType.Text);
+        var interfacesParam = cmd.Parameters.Add("@interfaces", SqliteType.Text);
+        var nsParam = cmd.Parameters.Add("@ns", SqliteType.Text);
+
+        foreach (var (typeId, baseClass, interfaces, ns) in typeMetadata)
+        {
+            typeIdParam.Value = typeId;
+            baseClassParam.Value = (object?)baseClass ?? DBNull.Value;
+            interfacesParam.Value = interfaces;
+            nsParam.Value = ns;
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    private static void InsertMethodIndex(SqliteConnection connection, IReadOnlyList<(string MethodId, string ContainingType, string FilePath)> methodIndex)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "INSERT INTO method_index (method_id, containing_type, file_path) VALUES (@methodId, @containingType, @filePath)";
+        var methodIdParam = cmd.Parameters.Add("@methodId", SqliteType.Text);
+        var containingTypeParam = cmd.Parameters.Add("@containingType", SqliteType.Text);
+        var filePathParam = cmd.Parameters.Add("@filePath", SqliteType.Text);
+
+        foreach (var (methodId, containingType, filePath) in methodIndex)
+        {
+            methodIdParam.Value = methodId;
+            containingTypeParam.Value = containingType;
+            filePathParam.Value = filePath;
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    private static void InsertTypeIndex(SqliteConnection connection, IReadOnlyList<(string TypeId, string Name, string FullName, string FilePath, string Kind)> typeIndex)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "INSERT INTO type_index (type_id, name, full_name, file_path, kind) VALUES (@typeId, @name, @fullName, @filePath, @kind)";
+        var typeIdParam = cmd.Parameters.Add("@typeId", SqliteType.Text);
+        var nameParam = cmd.Parameters.Add("@name", SqliteType.Text);
+        var fullNameParam = cmd.Parameters.Add("@fullName", SqliteType.Text);
+        var filePathParam = cmd.Parameters.Add("@filePath", SqliteType.Text);
+        var kindParam = cmd.Parameters.Add("@kind", SqliteType.Text);
+
+        foreach (var (typeId, name, fullName, filePath, kind) in typeIndex)
+        {
+            typeIdParam.Value = typeId;
+            nameParam.Value = name;
+            fullNameParam.Value = fullName;
+            filePathParam.Value = filePath;
+            kindParam.Value = kind;
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    //  Helpers
+    // -----------------------------------------------------------------------
+
+    private SqliteConnection OpenConnection()
+    {
+        var connection = new SqliteConnection($"Data Source={DbPath}");
+        connection.Open();
+        return connection;
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+        catch (IOException)
+        {
+            // Best-effort deletion; file may be locked.
+        }
+    }
+}

@@ -44,6 +44,29 @@ public static class LlmConfigLoader
             // ChatClientFactory will fail with a clear message.
         }
 
+        var normalizedEndpoint = string.IsNullOrWhiteSpace(config.Endpoint)
+            ? null
+            : config.Endpoint.Trim();
+
+        string[]? normalizedEndpoints = null;
+        if (config.Endpoints is { Length: > 0 })
+        {
+            normalizedEndpoints = config.Endpoints
+                .Where(e => !string.IsNullOrWhiteSpace(e))
+                .Select(e => e.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            if (normalizedEndpoints.Length == 0)
+                normalizedEndpoints = null;
+        }
+
+        config = config with
+        {
+            Endpoint = normalizedEndpoint,
+            Endpoints = normalizedEndpoints
+        };
+
         return config;
     }
 

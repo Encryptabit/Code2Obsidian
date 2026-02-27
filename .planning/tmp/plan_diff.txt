@@ -1,0 +1,799 @@
+diff --git a/.planning/phases/04-incremental-mode/04-01-PLAN.md b/.planning/phases/04-incremental-mode/04-01-PLAN.md
+new file mode 100644
+index 0000000..8e5320f
+--- /dev/null
++++ b/.planning/phases/04-incremental-mode/04-01-PLAN.md
+@@ -0,0 +1,221 @@
++---
++phase: 04-incremental-mode
++plan: 01
++type: execute
++wave: 1
++depends_on: []
++files_modified:
++  - Code2Obsidian.csproj
++  - Incremental/ChangeSet.cs
++  - Incremental/IChangeDetector.cs
++  - Incremental/GitChangeDetector.cs
++  - Incremental/HashChangeDetector.cs
++  - Incremental/StateSchema.cs
++  - Incremental/IncrementalState.cs
++autonomous: true
++requirements: [INFR-04, INFR-05]
++
++must_haves:
++  truths:
++    - "GitChangeDetector can compare a stored commit SHA against current HEAD+working tree and return a list of changed .cs file paths with change types (Added, Modified, Deleted, Renamed)"
++    - "HashChangeDetector can compare stored SHA256 hashes against current file content and return the same ChangeSet shape"
++    - "IncrementalState can create a fresh SQLite database, write run state + file hashes + call edges + type references + type files + emitted notes, and read them back"
++    - "Missing or corrupted state database triggers a 'full rebuild needed' signal without errors"
++  artifacts:
++    - path: "Incremental/ChangeSet.cs"
++      provides: "Domain model for change detection results"
++      contains: "record ChangeSet"
++    - path: "Incremental/IChangeDetector.cs"
++      provides: "Abstraction for git/hash change detection"
++      contains: "interface IChangeDetector"
++    - path: "Incremental/GitChangeDetector.cs"
++      provides: "LibGit2Sharp-based change detection with rename tracking"
++      contains: "class GitChangeDetector"
++    - path: "Incremental/HashChangeDetector.cs"
++      provides: "SHA256 content hash fallback detector"
++      contains: "class HashChangeDetector"
++    - path: "Incremental/StateSchema.cs"
++      provides: "SQLite schema creation and migration"
++      contains: "MigrateToV1"
++    - path: "Incremental/IncrementalState.cs"
++      provides: "SQLite state read/write operations"
++      contains: "class IncrementalState"
++  key_links:
++    - from: "Incremental/GitChangeDetector.cs"
++      to: "LibGit2Sharp"
++      via: "Repository class for git diff"
++      pattern: "repo\\.Diff\\.Compare"
++    - from: "Incremental/IncrementalState.cs"
++      to: "Microsoft.Data.Sqlite"
++      via: "SqliteConnection for state persistence"
++      pattern: "new SqliteConnection"
++    - from: "Incremental/IncrementalState.cs"
++      to: "Incremental/StateSchema.cs"
++      via: "Schema migration on open"
++      pattern: "StateSchema\\.EnsureSchema"
++---
++
++<objective>
++Create the incremental mode foundation: NuGet dependencies, change detection abstractions with git-primary/hash-fallback implementations, SQLite state storage with schema migration, and the ChangeSet domain model.
++
++Purpose: Establishes all data infrastructure needed by the ripple calculator, pipeline integration, and CLI orchestration in subsequent plans. These components are self-contained and testable in isolation.
++Output: New Incremental/ directory with 6 files, updated .csproj with Microsoft.Data.Sqlite + LibGit2Sharp packages.
++</objective>
++
++<execution_context>
++@~/.claude/get-shit-done/workflows/execute-plan.md
++@~/.claude/get-shit-done/templates/summary.md
++</execution_context>
++
++<context>
++@.planning/PROJECT.md
++@.planning/ROADMAP.md
++@.planning/STATE.md
++@.planning/phases/04-incremental-mode/04-RESEARCH.md
++</context>
++
++<tasks>
++
++<task type="auto">
++  <name>Task 1: NuGet packages and ChangeSet domain model + change detectors</name>
++  <files>
++    Code2Obsidian.csproj
++    Incremental/ChangeSet.cs
++    Incremental/IChangeDetector.cs
++    Incremental/GitChangeDetector.cs
++    Incremental/HashChangeDetector.cs
++  </files>
++  <action>
++1. Add NuGet packages:
++   - `dotnet add package Microsoft.Data.Sqlite --version 8.0.11`
++   - `dotnet add package LibGit2Sharp --version 0.31.0`
++   Verify the .csproj after adding. Use 8.0.x for Microsoft.Data.Sqlite (NOT 10.0.x) to match the project's .NET 8 target.
++
++2. Create `Incremental/ChangeSet.cs`:
++   - `FileChangeKind` enum: `Added`, `Modified`, `Deleted`, `Renamed`
++   - `FileChange` sealed record: `string Path`, `string? OldPath` (non-null for renames), `FileChangeKind Kind`
++   - `ChangeSet` sealed record: `IReadOnlyList<FileChange> Changes`, `string? CommitSha` (the HEAD commit SHA at detection time, null for hash-only detection), `bool IsFullRebuild` (true when no prior state exists)
++   - Add a convenience property `IReadOnlySet<string> ChangedFilePaths` that returns all non-deleted file paths (union of Path for Added/Modified/Renamed) as a case-insensitive HashSet. This is the set used for pipeline file filtering.
++   - Add a convenience property `IReadOnlySet<string> DeletedFilePaths` that returns Deleted file paths.
++   - Add a convenience property `IReadOnlyDictionary<string, string> RenamedPaths` that maps OldPath -> NewPath for Renamed entries.
++
++3. Create `Incremental/IChangeDetector.cs`:
++   - Interface with single method: `ChangeSet DetectChanges(string repoOrProjectPath, IncrementalState? priorState)`
++   - When priorState is null, return ChangeSet with IsFullRebuild = true (first run / INFR-05).
++
++4. Create `Incremental/GitChangeDetector.cs`:
++   - Implements `IChangeDetector`.
++   - Uses `LibGit2Sharp.Repository` to open the repo.
++   - If priorState is null OR priorState.CommitSha is null: return ChangeSet with IsFullRebuild = true.
++   - Otherwise: compare stored commit tree vs HEAD tree using `repo.Diff.Compare<TreeChanges>(oldTree, newTree, compareOptions)` with `SimilarityOptions.Renames` enabled.
++   - ALSO compare HEAD tree vs working directory + index using `repo.Diff.Compare<TreeChanges>(headTree, DiffTargets.Index | DiffTargets.WorkingDirectory)` to catch uncommitted changes.
++   - Merge both change sets (committed + working) deduplicating by path.
++   - Filter to only `.cs` files (skip non-C# changes).
++   - Map LibGit2Sharp `ChangeKind` to our `FileChangeKind` enum.
++   - For renames, populate both Path (new) and OldPath (old).
++   - Set CommitSha to repo.Head.Tip.Sha.
++   - Wrap the entire operation in try-catch: if the repo path is not a git repository (RepositoryNotFoundException), return null or throw a descriptive exception that the caller can catch to fall back to HashChangeDetector.
++
++5. Create `Incremental/HashChangeDetector.cs`:
++   - Implements `IChangeDetector`.
++   - Fallback detector for non-git repos or dirty working trees where git detection fails.
++   - If priorState is null: return ChangeSet with IsFullRebuild = true.
++   - Otherwise: enumerate all .cs files under the given path, compute SHA256 hash for each using `SHA256.HashData(stream)` + `Convert.ToHexString()`.
++   - Compare against stored hashes from priorState: new files = Added, hash mismatch = Modified, files in state but not on disk = Deleted.
++   - Cannot detect renames (hash fallback limitation) -- renames appear as Delete + Add pair.
++   - CommitSha = null (no git context).
++
++Namespace for all files: `Code2Obsidian.Incremental`.
++  </action>
++  <verify>
++`dotnet build` succeeds with no errors. All 5 new files compile. LibGit2Sharp and Microsoft.Data.Sqlite packages are in the .csproj.
++  </verify>
++  <done>
++IChangeDetector interface exists with GitChangeDetector (LibGit2Sharp) and HashChangeDetector (SHA256) implementations. ChangeSet domain model captures file changes with rename tracking. NuGet packages installed.
++  </done>
++</task>
++
++<task type="auto">
++  <name>Task 2: SQLite state storage with schema migration</name>
++  <files>
++    Incremental/StateSchema.cs
++    Incremental/IncrementalState.cs
++  </files>
++  <action>
++1. Create `Incremental/StateSchema.cs`:
++   - Static class with `EnsureSchema(SqliteConnection connection)` method.
++   - Check `PRAGMA user_version` -- if 0 (fresh DB), run MigrateToV1.
++   - `MigrateToV1` creates 6 tables in a single transaction (see research schema):
++     - `run_state` (id=1 singleton, commit_sha TEXT, run_timestamp TEXT)
++     - `file_hashes` (file_path TEXT PK, content_hash TEXT)
++     - `call_edges` (caller_id TEXT, callee_id TEXT, caller_file TEXT, callee_file TEXT, PK on caller_id+callee_id)
++     - `type_references` (type_id TEXT, file_path TEXT, PK on type_id+file_path)
++     - `type_files` (type_id TEXT, file_path TEXT, PK on type_id+file_path)
++     - `emitted_notes` (note_path TEXT PK, source_file TEXT, entity_id TEXT)
++   - Create indexes per research: idx_call_edges_callee, idx_call_edges_caller_file, idx_call_edges_callee_file, idx_type_references_file, idx_type_files_file, idx_emitted_notes_source, idx_emitted_notes_entity.
++   - Set `PRAGMA user_version = 1` at end of migration.
++   - Enable WAL mode: `PRAGMA journal_mode = 'wal'` after connection open but before schema check.
++
++2. Create `Incremental/IncrementalState.cs`:
++   - Sealed class, NOT IDisposable -- connections are opened and closed per operation (not held open during pipeline).
++   - Constructor takes `string dbPath` (absolute path to `.code2obsidian-state.db`).
++   - Public property `string DbPath { get; }`.
++
++   **Read methods** (open connection, read, close):
++   - `bool TryLoad(out string? commitSha)` -- returns false if DB doesn't exist or is corrupt (catches SqliteException). If DB exists, opens connection, runs EnsureSchema, reads run_state. Returns true with commitSha (or null if no prior run). On ANY exception, returns false (silent full rebuild per user decision).
++   - `IReadOnlyDictionary<string, string> GetFileHashes()` -- returns file_path -> content_hash map.
++   - `IReadOnlyList<(string CallerId, string CalleeId, string CallerFile, string CalleeFile)> GetCallEdges()` -- returns all stored call edges.
++   - `IReadOnlyList<(string TypeId, string FilePath)> GetTypeReferences()` -- returns all type reference entries.
++   - `IReadOnlyList<(string TypeId, string FilePath)> GetTypeFiles()` -- returns all type->file mappings (for partial class support).
++   - `IReadOnlyDictionary<string, (string SourceFile, string EntityId)> GetEmittedNotes()` -- returns note_path -> (source_file, entity_id).
++   - `IReadOnlySet<string> GetCallers(string methodId)` -- returns caller_id set for a given callee_id (one-hop reverse lookup).
++   - `IReadOnlySet<string> GetCallees(string methodId)` -- returns callee_id set for a given caller_id.
++   - `string? GetFileForMethod(string methodId)` -- looks up caller_file from call_edges where caller_id matches (returns first match).
++
++   **Write methods** (open connection, write in transaction, close):
++   - `void SaveState(string? commitSha, IReadOnlyDictionary<string, string> fileHashes, IReadOnlyList<(string CallerId, string CalleeId, string CallerFile, string CalleeFile)> callEdges, IReadOnlyList<(string TypeId, string FilePath)> typeReferences, IReadOnlyList<(string TypeId, string FilePath)> typeFiles, IReadOnlyDictionary<string, (string SourceFile, string EntityId)> emittedNotes)`
++     - Opens connection, begins transaction.
++     - DELETE all rows from all 6 tables (full state replacement per run -- simplifies logic vs. incremental table updates).
++     - INSERT run_state with commitSha and current timestamp.
++     - INSERT all file hashes, call edges, type references, type files, emitted notes using parameterized commands.
++     - Commit transaction. If any step fails, transaction rolls back automatically.
++   - Use `cmd.Parameters.AddWithValue()` for ALL inserts (never string interpolation into SQL).
++
++   **Delete method:**
++   - `void DeleteState()` -- deletes the .db file, .db-wal, and .db-shm files if they exist. Used by --full-rebuild.
++
++   **Error handling:**
++   - All read methods catch SqliteException and return empty/default values (corrupted state = full rebuild).
++   - TryLoad catches ALL exceptions (including file access) and returns false.
++
++Namespace: `Code2Obsidian.Incremental`.
++  </action>
++  <verify>
++`dotnet build` succeeds. IncrementalState can be instantiated with a path. StateSchema.EnsureSchema compiles against SqliteConnection.
++  </verify>
++  <done>
++SQLite state storage fully implemented: 6-table schema with indexes and WAL mode, read/write/delete operations, PRAGMA user_version migration, graceful corruption handling (silent full rebuild).
++  </done>
++</task>
++
++</tasks>
++
++<verification>
++- `dotnet build` produces no errors and no warnings from new code
++- New `Incremental/` directory contains exactly 6 .cs files: ChangeSet.cs, IChangeDetector.cs, GitChangeDetector.cs, HashChangeDetector.cs, StateSchema.cs, IncrementalState.cs
++- .csproj contains Microsoft.Data.Sqlite 8.0.x and LibGit2Sharp 0.31.0
++- All types are in the `Code2Obsidian.Incremental` namespace
++</verification>
++
++<success_criteria>
++- NuGet packages installed and compiling
++- ChangeSet domain model captures Added/Modified/Deleted/Renamed with rename path tracking
++- GitChangeDetector uses LibGit2Sharp with committed + working tree comparison and rename detection
++- HashChangeDetector provides SHA256 fallback for non-git repos
++- IncrementalState manages SQLite with 6-table schema, WAL mode, PRAGMA user_version migration
++- Missing/corrupt state returns "full rebuild needed" without throwing (INFR-05)
++</success_criteria>
++
++<output>
++After completion, create `.planning/phases/04-incremental-mode/04-01-SUMMARY.md`
++</output>
+diff --git a/.planning/phases/04-incremental-mode/04-02-PLAN.md b/.planning/phases/04-incremental-mode/04-02-PLAN.md
+new file mode 100644
+index 0000000..cf3d700
+--- /dev/null
++++ b/.planning/phases/04-incremental-mode/04-02-PLAN.md
+@@ -0,0 +1,232 @@
++---
++phase: 04-incremental-mode
++plan: 02
++type: execute
++wave: 2
++depends_on: ["04-01"]
++files_modified:
++  - Incremental/RippleCalculator.cs
++  - Incremental/StaleNoteDetector.cs
++  - Incremental/AnalysisResultMerger.cs
++  - Analysis/Analyzers/MethodAnalyzer.cs
++  - Analysis/Analyzers/TypeAnalyzer.cs
++  - Emission/ObsidianEmitter.cs
++  - Emission/IEmitter.cs
++  - Emission/EmitResult.cs
++autonomous: true
++requirements: [INFR-03]
++
++must_haves:
++  truths:
++    - "RippleCalculator computes the full set of affected files from changed files using one-hop callers/callees from stored and fresh call graphs"
++    - "Structural changes (deleted types, base class changes, interface changes, namespace moves) trigger wide ripple to all files referencing the changed type"
++    - "MethodAnalyzer and TypeAnalyzer accept an optional file filter and skip documents not in the filter set"
++    - "AnalysisResultMerger combines fresh analysis data for changed files with stored data for unchanged files into a complete AnalysisResult"
++    - "ObsidianEmitter accepts a dirty-files set and only writes notes for entities from those files while using full AnalysisResult for collision detection"
++    - "StaleNoteDetector identifies notes in the vault that should be deleted because their source entities no longer exist"
++  artifacts:
++    - path: "Incremental/RippleCalculator.cs"
++      provides: "One-hop ripple computation with structural change detection"
++      contains: "class RippleCalculator"
++    - path: "Incremental/StaleNoteDetector.cs"
++      provides: "Stale note detection by comparing emitted vs stored notes"
++      contains: "class StaleNoteDetector"
++    - path: "Incremental/AnalysisResultMerger.cs"
++      provides: "Merges fresh + stored analysis data into complete result"
++      contains: "class AnalysisResultMerger"
++    - path: "Analysis/Analyzers/MethodAnalyzer.cs"
++      provides: "File filter support in document iteration"
++      contains: "fileFilter"
++    - path: "Analysis/Analyzers/TypeAnalyzer.cs"
++      provides: "File filter support in document iteration"
++      contains: "fileFilter"
++    - path: "Emission/ObsidianEmitter.cs"
++      provides: "Selective emission using dirty-files set"
++      contains: "dirtyFiles"
++  key_links:
++    - from: "Incremental/RippleCalculator.cs"
++      to: "Incremental/IncrementalState.cs"
++      via: "Reads stored call edges, type references, and type metadata for ripple computation"
++      pattern: "state\\.GetCallers|state\\.GetTypeReferences|state\\.GetTypeMetadata"
++    - from: "Incremental/AnalysisResultMerger.cs"
++      to: "Incremental/IncrementalState.cs"
++      via: "Reads stored method_index and type_index for collision-safe merging"
++      pattern: "state\\.GetMethodIndex|state\\.GetTypeIndex"
++    - from: "Incremental/AnalysisResultMerger.cs"
++      to: "Analysis/AnalysisResult.cs"
++      via: "Constructs merged AnalysisResult from fresh + stored data"
++      pattern: "new AnalysisResult"
++    - from: "Analysis/Analyzers/MethodAnalyzer.cs"
++      to: "file filter set"
++      via: "Skips documents not in filter during iteration"
++      pattern: "fileFilter.*Contains.*FilePath"
++    - from: "Emission/ObsidianEmitter.cs"
++      to: "dirty files set"
++      via: "Only writes notes for entities in dirty files"
++      pattern: "dirtyFiles.*Contains"
++---
++
++<objective>
++Implement the incremental analysis core: ripple calculator for one-hop + structural change detection, stale note detection, analysis result merging for fresh + stored data, file-filter injection into analyzers, and selective emission in the emitter.
++
++Purpose: These are the computation and pipeline-modification components that make incremental mode work. They sit between the foundation (plan 01) and the CLI orchestration (plan 03). Each component has clear inputs and outputs, enabling the orchestrator in plan 03 to compose them into the full incremental flow.
++Output: 3 new Incremental/ files, modifications to both analyzers and the emitter to support filtered execution.
++</objective>
++
++<execution_context>
++@~/.claude/get-shit-done/workflows/execute-plan.md
++@~/.claude/get-shit-done/templates/summary.md
++</execution_context>
++
++<context>
++@.planning/PROJECT.md
++@.planning/ROADMAP.md
++@.planning/STATE.md
++@.planning/phases/04-incremental-mode/04-RESEARCH.md
++@.planning/phases/04-incremental-mode/04-01-SUMMARY.md
++</context>
++
++<tasks>
++
++<task type="auto">
++  <name>Task 1: RippleCalculator, StaleNoteDetector, and AnalysisResultMerger</name>
++  <files>
++    Incremental/RippleCalculator.cs
++    Incremental/StaleNoteDetector.cs
++    Incremental/AnalysisResultMerger.cs
++  </files>
++  <action>
++All three tables needed by these components (type_metadata, method_index, type_index) are already created in Plan 04-01's StateSchema with corresponding read/write methods on IncrementalState. This task consumes those APIs -- it does NOT modify the schema or state classes.
++
++1. Create `Incremental/RippleCalculator.cs`:
++   - Sealed class with static method: `HashSet<string> ComputeAffectedFiles(IReadOnlySet<string> changedFiles, AnalysisResult freshAnalysis, IncrementalState state)`
++   - Start with all changed files in the affected set (use StringComparer.OrdinalIgnoreCase).
++   - **One-hop callers** (unchanged code calling into changed code): For each method in freshAnalysis whose FilePath is in changedFiles, look up callers in state.GetCallers(methodId.Value). For each stored caller, get its file via state.GetFileForMethod(callerId). Add caller files to affected set.
++   - **One-hop callees** (changed code calling into unchanged code): For each method in freshAnalysis whose FilePath is in changedFiles, iterate its CallGraph.GetCallees(). For each callee, get its file from state.GetFileForMethod(calleeId.Value). Add callee files to affected set.
++   - **Structural change detection**: Add a separate static method `HashSet<string> DetectStructuralRipple(AnalysisResult freshAnalysis, IReadOnlySet<string> changedFiles, IncrementalState state)`:
++     - Load stored type info: state.GetTypeReferences(), state.GetTypeFiles(), and state.GetTypeMetadata().
++     - For each type in freshAnalysis.Types whose FilePath is in changedFiles:
++       - Check if the TypeId exists in stored type_files. If NOT (new type) -- no wide ripple needed.
++       - If it exists, compare stored base class, interfaces, namespace from type_metadata against fresh values. If changed, add ALL files from type_references for that TypeId to the affected set.
++     - For TypeIds present in stored type_files for changed files but NOT in freshAnalysis.Types (deleted type): add ALL files from type_references for that TypeId to the affected set.
++   - Combine one-hop + structural results into the final affected file set.
++
++2. Create `Incremental/StaleNoteDetector.cs`:
++   - Sealed class with static method: `IReadOnlyList<string> FindStaleNotes(IReadOnlyDictionary<string, (string SourceFile, string EntityId)> storedNotes, IReadOnlySet<string> currentEntityIds, IReadOnlySet<string> reanalyzedFiles)`
++   - A stored note is stale if:
++     (a) Its source_file was reanalyzed (meaning we have fresh data for it), AND
++     (b) Its entity_id is NOT in the current emission set (meaning the entity was deleted or renamed).
++   - Do NOT mark notes as stale if their source_file was NOT reanalyzed (those files were unchanged -- their notes are still valid).
++   - Return the list of note file paths (absolute vault paths) that should be deleted.
++
++3. Create `Incremental/AnalysisResultMerger.cs`:
++   - Sealed class with static method: `AnalysisResult Merge(AnalysisResult freshResult, IncrementalState state, IReadOnlySet<string> reanalyzedFiles)`
++   - Purpose: Combine freshly analyzed data (for changed + ripple files) with stored data (for unchanged files) into a complete AnalysisResult that the emitter can use as if it were a full analysis.
++   - **Methods**: Start with all methods from freshResult. Then load stored method_index via state.GetMethodIndex() for methods whose files are NOT in reanalyzedFiles. Use Approach B (lightweight): method_index only stores (method_id, containing_type, file_path) -- this is sufficient for the emitter's collision detection (wikilinks). The emitter only writes notes for dirty files, so unchanged method metadata is only needed for ContainingTypeName disambiguation.
++   - **Types**: Start with freshResult.Types. Load stored type data from state.GetTypeIndex() for files NOT in reanalyzedFiles. type_index stores (type_id, name, full_name, file_path, kind) -- enough for collision detection.
++   - **CallGraph**: Merge fresh call graph edges with stored edges from state.GetCallEdges(). Only include stored edges where BOTH caller and callee files are NOT in reanalyzedFiles -- edges involving reanalyzed files come from fresh data.
++   - **Implementors**: Reconstruct from stored type_references + fresh data.
++   - **Counts**: ProjectCount and FileCount from the full solution (these come from the pipeline, not the merger).
++   - The merger returns a complete AnalysisResult usable by the emitter.
++  </action>
++  <verify>
++`dotnet build` succeeds. RippleCalculator.ComputeAffectedFiles compiles with the correct parameter types. StaleNoteDetector.FindStaleNotes compiles. AnalysisResultMerger.Merge compiles and returns AnalysisResult.
++  </verify>
++  <done>
++RippleCalculator computes one-hop + structural ripple from fresh analysis and stored state. StaleNoteDetector identifies deletable notes. AnalysisResultMerger combines fresh + stored data into a complete AnalysisResult using stored method_index, type_index, and type_metadata from the 04-01 schema.
++  </done>
++</task>
++
++<task type="auto">
++  <name>Task 2: File filter injection into analyzers and selective emission</name>
++  <files>
++    Analysis/Analyzers/MethodAnalyzer.cs
++    Analysis/Analyzers/TypeAnalyzer.cs
++    Emission/ObsidianEmitter.cs
++    Emission/IEmitter.cs
++    Emission/EmitResult.cs
++  </files>
++  <action>
++1. Modify `Analysis/Analyzers/MethodAnalyzer.cs`:
++   - Add an optional `IReadOnlySet<string>?` fileFilter field set via constructor parameter (default null).
++   - In the document iteration loop (the `foreach (var document in project.Documents)` block), AFTER the null/whitespace FilePath check, add:
++     ```
++     if (fileFilter is not null && !fileFilter.Contains(document.FilePath!))
++     {
++         // Skip unchanged files in incremental mode
++         continue;
++     }
++     ```
++   - The file filter uses case-insensitive comparison. Ensure the HashSet passed in uses StringComparer.OrdinalIgnoreCase.
++   - The `IncrementFileCount()` call should ONLY count files that are actually analyzed (move it after the filter check).
++   - Keep the existing constructor as a parameterless overload (fileFilter = null = full analysis mode, backward compatible).
++
++2. Modify `Analysis/Analyzers/TypeAnalyzer.cs`:
++   - Same pattern as MethodAnalyzer: add optional fileFilter constructor parameter.
++   - Apply the same document-level filter in the iteration loop.
++   - Preserve backward-compatible parameterless constructor.
++
++3. Modify `Emission/IEmitter.cs`:
++   - Add a new overload to the interface:
++     `Task<EmitResult> EmitAsync(EnrichedResult result, string outputDirectory, IReadOnlySet<string>? dirtyFiles, CancellationToken ct)`
++   - The existing `EmitAsync(EnrichedResult, string, CancellationToken)` remains as the default (full emission). Add a default interface method that delegates to the new overload with dirtyFiles = null.
++   - Alternative (simpler, preferred): Change the existing signature to add the optional parameter with default null:
++     `Task<EmitResult> EmitAsync(EnrichedResult result, string outputDirectory, CancellationToken ct, IReadOnlySet<string>? dirtyFiles = null)`
++     This is source-compatible since existing callers don't pass dirtyFiles.
++     Actually, since CancellationToken is not last, use this approach instead: keep original signature, add new method. Or better yet: just modify ObsidianEmitter to accept dirtyFiles in constructor (like fanInThreshold). This avoids interface changes.
++   - DECISION: Add `IReadOnlySet<string>? dirtyFiles` as a constructor parameter on ObsidianEmitter (default null). When null, emit all notes (full mode). When non-null, only emit notes for entities whose FilePath is in the dirty set. The IEmitter interface stays unchanged.
++
++4. Modify `Emission/ObsidianEmitter.cs`:
++   - Add `private readonly IReadOnlySet<string>? _dirtyFiles;` field, set via new constructor parameter `IReadOnlySet<string>? dirtyFiles = null`.
++   - In the method note emission loop (`foreach (var (methodId, method) in analysis.Methods)`), add at the top:
++     ```
++     if (_dirtyFiles is not null && !_dirtyFiles.Contains(method.FilePath))
++         continue;
++     ```
++   - In the type note emission loop (`foreach (var (typeId, typeInfo) in analysis.Types)`), add the same check:
++     ```
++     if (_dirtyFiles is not null && !_dirtyFiles.Contains(typeInfo.FilePath))
++         continue;
++     ```
++   - CRITICAL: The collision detection (BuildCollisionSet, BuildOverloadIndex) must still operate on the FULL AnalysisResult, not just dirty files. This is already the case since those methods iterate analysis.Methods/analysis.Types. The filter only affects which notes are WRITTEN.
++   - Track emitted note paths for state storage: collect a `List<(string NotePath, string SourceFile, string EntityId)>` during emission. For method notes: NotePath = the file path written, SourceFile = method.FilePath, EntityId = methodId.Value. For type notes: EntityId = typeId.Value. Expose this via a new property or return it as part of EmitResult.
++
++5. Modify `Emission/EmitResult.cs`:
++   - Add a new field: `IReadOnlyList<(string NotePath, string SourceFile, string EntityId)> EmittedNotes` to track what was emitted for state storage.
++   - Update the record: `public sealed record EmitResult(int NotesWritten, IReadOnlyList<string> Warnings, IReadOnlyList<(string NotePath, string SourceFile, string EntityId)> EmittedNotes)`
++   - Update the constructor call in ObsidianEmitter.EmitAsync to pass the collected emitted notes list.
++
++BACKWARD COMPATIBILITY: All changes use optional parameters with null defaults. Existing code in Pipeline.cs and Program.cs continues to work without modification. The Pipeline.RunAsync still calls `_emitter.EmitAsync(enrichedResult, outputDir, ct)` which works fine -- the emitter just emits everything when dirtyFiles is null.
++  </action>
++  <verify>
++`dotnet build` succeeds with no errors. Existing pipeline still works (all new parameters have defaults). MethodAnalyzer and TypeAnalyzer accept file filter. ObsidianEmitter accepts dirty files set. EmitResult includes EmittedNotes.
++  </verify>
++  <done>
++MethodAnalyzer and TypeAnalyzer skip documents not in the file filter (null = analyze all). ObsidianEmitter only writes notes for dirty files while using full AnalysisResult for collision detection. EmitResult tracks emitted note paths for state storage.
++  </done>
++</task>
++
++</tasks>
++
++<verification>
++- `dotnet build` produces no errors
++- MethodAnalyzer with no fileFilter still analyzes all documents (backward compatible)
++- ObsidianEmitter with no dirtyFiles still emits all notes (backward compatible)
++- RippleCalculator produces a superset of changedFiles (adds caller/callee neighbors)
++- StaleNoteDetector only marks notes from reanalyzed files as stale
++- AnalysisResultMerger produces a complete AnalysisResult usable by the emitter
++</verification>
++
++<success_criteria>
++- Ripple computation adds one-hop neighbors and structural change files to the affected set
++- Structural changes (type deletion, base class change, interface change, namespace move) trigger wide ripple
++- Analyzers respect file filter, skipping unchanged documents
++- Emitter respects dirty-files set, only writing affected notes
++- Merger reconstructs a complete AnalysisResult from fresh + stored data
++- Stale notes are identified based on reanalyzed files with missing entities
++- All changes are backward compatible (full mode works unchanged)
++</success_criteria>
++
++<output>
++After completion, create `.planning/phases/04-incremental-mode/04-02-SUMMARY.md`
++</output>
+diff --git a/.planning/phases/04-incremental-mode/04-03-PLAN.md b/.planning/phases/04-incremental-mode/04-03-PLAN.md
+new file mode 100644
+index 0000000..322d251
+--- /dev/null
++++ b/.planning/phases/04-incremental-mode/04-03-PLAN.md
+@@ -0,0 +1,328 @@
++---
++phase: 04-incremental-mode
++plan: 03
++type: execute
++wave: 3
++depends_on: ["04-01", "04-02"]
++files_modified:
++  - Program.cs
++  - Cli/CliOptions.cs
++  - Pipeline/Pipeline.cs
++  - Pipeline/PipelineResult.cs
++autonomous: true
++requirements: [INFR-03, INFR-04, INFR-05]
++
++must_haves:
++  truths:
++    - "Running with --incremental after modifying one file regenerates only the notes affected by that change (INFR-03 success criterion 1)"
++    - "The tool stores and compares git commit hashes to determine which files changed since the last run (INFR-04 / success criterion 2)"
++    - "First run on a repo with no prior state performs full analysis without errors or special setup (INFR-05 / success criterion 3)"
++    - "Running with --full-rebuild forces state wipe and full analysis even when state exists"
++    - "Progress display shows skipped work count (e.g. 'Analyzing 12/200 files (188 unchanged)')"
++    - "Stale notes from deleted/renamed entities are automatically removed from the vault"
++    - "State is written only after successful emission (not before)"
++  artifacts:
++    - path: "Program.cs"
++      provides: "Full incremental orchestration wired into CLI"
++      contains: "incrementalOption"
++    - path: "Cli/CliOptions.cs"
++      provides: "Incremental, FullRebuild, DryRun flag properties"
++      contains: "Incremental"
++    - path: "Pipeline/Pipeline.cs"
++      provides: "File filter and dirty files passed to analyzers and emitter"
++      contains: "fileFilter"
++    - path: "Pipeline/PipelineResult.cs"
++      provides: "Incremental mode metrics (files skipped, notes deleted)"
++      contains: "FilesSkipped"
++  key_links:
++    - from: "Program.cs"
++      to: "Incremental/GitChangeDetector.cs"
++      via: "Detects changes using git diff against stored commit"
++      pattern: "GitChangeDetector|HashChangeDetector"
++    - from: "Program.cs"
++      to: "Incremental/IncrementalState.cs"
++      via: "Loads prior state, saves state after emission"
++      pattern: "IncrementalState|TryLoad|SaveState"
++    - from: "Program.cs"
++      to: "Incremental/RippleCalculator.cs"
++      via: "Computes affected files from change set"
++      pattern: "RippleCalculator\\.ComputeAffectedFiles"
++    - from: "Program.cs"
++      to: "Incremental/StaleNoteDetector.cs"
++      via: "Finds and deletes stale notes after emission"
++      pattern: "StaleNoteDetector\\.FindStaleNotes"
++    - from: "Pipeline/Pipeline.cs"
++      to: "Analysis/Analyzers/MethodAnalyzer.cs"
++      via: "Passes file filter to analyzer constructors"
++      pattern: "new MethodAnalyzer.*fileFilter"
++---
++
++<objective>
++Wire the complete incremental flow into the CLI and pipeline: new --incremental/--full-rebuild/--dry-run flags, two-pass analysis orchestration, change detection with git-primary/hash-fallback, ripple computation, selective emission, stale note cleanup, state save after success, and progress display showing skipped file counts.
++
++Purpose: This is the integration plan that makes incremental mode usable end-to-end. It composes all components from plans 01 and 02 into the actual user-facing feature, satisfying all three INFR requirements.
++Output: Modified Program.cs, CliOptions, Pipeline, and PipelineResult with full incremental orchestration.
++</objective>
++
++<execution_context>
++@~/.claude/get-shit-done/workflows/execute-plan.md
++@~/.claude/get-shit-done/templates/summary.md
++</execution_context>
++
++<context>
++@.planning/PROJECT.md
++@.planning/ROADMAP.md
++@.planning/STATE.md
++@.planning/phases/04-incremental-mode/04-RESEARCH.md
++@.planning/phases/04-incremental-mode/04-01-SUMMARY.md
++@.planning/phases/04-incremental-mode/04-02-SUMMARY.md
++</context>
++
++<tasks>
++
++<task type="auto">
++  <name>Task 1: CLI flags, CliOptions, and PipelineResult updates</name>
++  <files>
++    Program.cs
++    Cli/CliOptions.cs
++    Pipeline/PipelineResult.cs
++  </files>
++  <action>
++1. Update `Cli/CliOptions.cs`:
++   - Add three new properties to the record:
++     ```
++     public sealed record CliOptions(
++         string SolutionPath,
++         string OutputDirectory,
++         int FanInThreshold = 10,
++         int ComplexityThreshold = 15,
++         bool Incremental = false,
++         bool FullRebuild = false,
++         bool DryRun = false);
++     ```
++
++2. Update `Pipeline/PipelineResult.cs`:
++   - Add incremental mode metrics:
++     - `int FilesSkipped { get; set; }` -- number of files skipped due to being unchanged
++     - `int NotesDeleted { get; set; }` -- number of stale notes removed
++     - `bool WasIncremental { get; set; }` -- whether this run used incremental mode
++   - These are used in the summary table rendering.
++   - Add `AnalysisResult? AnalysisResult { get; set; }` to expose analysis data for state saving in incremental mode.
++   - Add `EmitResult? EmitResult { get; set; }` to expose emitted notes list for state saving.
++
++3. Update `Program.cs` -- CLI flag registration:
++   - Add three new System.CommandLine options:
++     ```
++     var incrementalOption = new Option<bool>("--incremental")
++     {
++         Description = "Only regenerate notes for files changed since last run"
++     };
++     var fullRebuildOption = new Option<bool>("--full-rebuild")
++     {
++         Description = "Force full analysis even when incremental state exists"
++     };
++     var dryRunOption = new Option<bool>("--dry-run")
++     {
++         Description = "Show what would be regenerated without writing files"
++     };
++     ```
++   - Add all three to rootCommand.
++   - Update the SetAction lambda to extract these values and pass to RunPipelineAsync.
++   - Update RunPipelineAsync signature to accept the three new bool parameters.
++
++4. Update `Program.cs` -- summary rendering:
++   - In `RenderSummary`, if `result.WasIncremental`:
++     - Modify the Analysis row to show: "{FilesAnalyzed} files ({FilesSkipped} skipped)"
++     - Add stale note deletion count if NotesDeleted > 0.
++  </action>
++  <verify>
++`dotnet build` succeeds. `dotnet run -- --help` shows --incremental, --full-rebuild, and --dry-run options in help text.
++  </verify>
++  <done>
++CLI flags registered, CliOptions extended, PipelineResult tracks incremental metrics and exposes AnalysisResult/EmitResult, summary rendering shows skipped counts.
++  </done>
++</task>
++
++<task type="auto">
++  <name>Task 2: Basic modes and state save framework (Cases A/B/D)</name>
++  <files>
++    Program.cs
++    Pipeline/Pipeline.cs
++  </files>
++  <action>
++This task wires the non-incremental paths and the state save framework. Task 3 builds on this with the full incremental flow.
++
++1. Update `Pipeline/Pipeline.cs`:
++   - In Pipeline.RunAsync, set `result.AnalysisResult = analysisResult` and `result.EmitResult = emitResult` before returning, so Program.cs can extract state data.
++   - No other structural changes needed -- analyzers and emitter are pre-configured with filters by their callers.
++
++2. Update `Program.cs` -- state save helper:
++   - Create a private helper method: `SaveIncrementalState(IncrementalState state, PipelineResult result, IReadOnlySet<string>? affectedFiles, IncrementalState? priorState)`
++   - This method extracts state data from the AnalysisResult and EmitResult and calls state.SaveState():
++     - fileHashes: For each file in the affected set, compute SHA256 hash of the current file content. Merge with stored hashes (from priorState) for non-affected files. On full analysis, hash all analyzed files.
++     - callEdges: From AnalysisResult.CallGraph, extract all edges. For each edge, look up the file path from Methods dict. Merge fresh edges (files in affectedSet) with stored edges (files not in affectedSet). On full analysis, all edges are fresh.
++     - typeReferences: From AnalysisResult.Types, for each type, record (typeId, filePath). Also scan Methods for type references via ContainingTypeId.
++     - typeFiles: From AnalysisResult.Types, record (typeId, filePath) for all types.
++     - emittedNotes: From EmitResult.EmittedNotes, merged with stored notes for non-reanalyzed files.
++     - typeMetadata: From AnalysisResult.Types, extract (typeId, baseClass, interfaces, namespace) for structural comparison.
++     - methodIndex: From AnalysisResult.Methods, extract (methodId, containingType, filePath).
++     - typeIndex: From AnalysisResult.Types, extract (typeId, name, fullName, filePath, kind).
++   - State DB path: `Path.Combine(outputDir, ".code2obsidian-state.db")`.
++   - Add `.code2obsidian-state.db*` to the vault's .gitignore (create one if it doesn't exist, or append if not already present).
++
++3. Update `Program.cs` -- Case A (no --incremental flag):
++   - Behavior unchanged from prior phases. Full analysis, full emission via existing Pipeline.RunAsync. No state interaction.
++   - After pipeline completes, if result is successful, check -- do NOT save state when --incremental is not used. State saving only happens when --incremental or --full-rebuild is active.
++
++4. Update `Program.cs` -- Case B (--incremental with no prior state / first run):
++   - Instantiate IncrementalState with DB path.
++   - Call state.TryLoad(). If returns false (no DB or corrupt):
++     - Log: "No prior state found. Performing full analysis and saving state."
++     - Perform full analysis (no file filter) via existing Pipeline.RunAsync.
++     - After successful emission, call SaveIncrementalState with affectedFiles = null (full mode).
++     - Set result.WasIncremental = true (even though it was full, the flag was on).
++
++5. Update `Program.cs` -- Case D (--full-rebuild):
++   - Instantiate IncrementalState with DB path.
++   - Call state.DeleteState() to wipe the database and WAL/SHM files.
++   - Log: "State wiped. Performing full analysis."
++   - Perform full analysis via existing Pipeline.RunAsync.
++   - After successful emission, call SaveIncrementalState with affectedFiles = null.
++   - Set result.WasIncremental = false (this was explicitly a full rebuild).
++
++6. Update `Program.cs` -- routing logic at top of RunPipelineAsync:
++   - If --full-rebuild: execute Case D.
++   - Else if --incremental: try load state. If no state -> Case B. If state exists -> Case C (implemented in Task 3, for now placeholder that falls through to full analysis with a TODO comment).
++   - Else: Case A.
++  </action>
++  <verify>
++- `dotnet build` succeeds with no errors.
++- Non-incremental mode works exactly as before: `dotnet run -- path/to/solution.sln` produces vault output with no state interaction.
++- `dotnet run -- path/to/solution.sln --full-rebuild` deletes state DB and performs full analysis.
++- `dotnet run -- path/to/solution.sln --incremental` on first run performs full analysis and creates `.code2obsidian-state.db` in output dir.
++  </verify>
++  <done>
++Pipeline exposes AnalysisResult/EmitResult. State save framework extracts all 9 data sets from pipeline output. Cases A (no flag), B (first incremental run), and D (full rebuild) work end-to-end. State DB created in vault root with .gitignore entry.
++  </done>
++</task>
++
++<task type="auto">
++  <name>Task 3: Full incremental flow and dry-run (Cases C/E)</name>
++  <files>
++    Program.cs
++  </files>
++  <action>
++This task implements the core incremental orchestration -- the two-pass analysis, ripple computation, selective emission, stale cleanup, and dry-run mode. It replaces the Case C placeholder from Task 2.
++
++1. Update `Program.cs` -- Case C (--incremental with existing state):
++   - Load state: IncrementalState.TryLoad returns true with commitSha.
++   - Detect changes: Try GitChangeDetector first. If it throws (not a git repo / RepositoryNotFoundException), fall back to HashChangeDetector.
++   - If no changes detected (ChangeSet.Changes is empty): log "No changes detected. Vault is up to date." and return exit code 0 immediately.
++   - **Git rename handling** (before analysis):
++     - If changeSet.RenamedPaths has entries: for each old->new rename, check if a note exists at the old path in the vault. If so, rename the note file (File.Move). This preserves Obsidian backlinks if the vault is in git.
++
++2. **Pass 1 -- Analyze changed files only:**
++   - Create MethodAnalyzer and TypeAnalyzer with fileFilter = changeSet.ChangedFilePaths.
++   - Call analyzers directly (MethodAnalyzer.AnalyzeAsync + TypeAnalyzer.AnalyzeAsync) without going through Pipeline.RunAsync. This avoids running enrichment + emission for the intermediate pass.
++   - Extract fresh AnalysisResult from pass 1.
++
++3. **Ripple computation:**
++   - Call RippleCalculator.ComputeAffectedFiles(changeSet.ChangedFilePaths, freshAnalysis, state).
++   - Also call RippleCalculator.DetectStructuralRipple(freshAnalysis, changeSet.ChangedFilePaths, state).
++   - Union both results into the full affected file set.
++
++4. **Pass 2 -- Analyze affected files (if ripple expanded the set):**
++   - If affectedFiles is larger than changedFiles (ripple found neighbors):
++     - Create new analyzers with fileFilter = affectedFiles.
++     - Call analyzers again. This produces the complete fresh AnalysisResult for ALL affected files.
++   - If affectedFiles == changedFiles: pass 1 result is already complete.
++
++5. **Merge with stored data:**
++   - Call AnalysisResultMerger.Merge(freshAnalysis, state, affectedFiles) to get complete AnalysisResult.
++
++6. **Selective emission:**
++   - Create ObsidianEmitter with dirtyFiles = affectedFiles.
++   - Create EnrichedResult from merged AnalysisResult (run enricher if needed, or construct directly).
++   - Call emitter.EmitAsync directly with the merged EnrichedResult.
++   - CRITICAL: The emitter uses the full merged AnalysisResult for collision detection but only writes notes for dirty files.
++
++7. **Stale note cleanup:**
++   - Call StaleNoteDetector.FindStaleNotes(state.GetEmittedNotes(), currentEntityIds, affectedFiles).
++   - currentEntityIds = set of all entity IDs in the fresh analysis for reanalyzed files.
++   - Delete each stale note file from disk (File.Delete). Count deletions.
++   - Set result.NotesDeleted = stale count.
++
++8. **Save state:**
++   - After successful emission, call SaveIncrementalState(state, result, affectedFiles, priorState).
++   - This merges fresh state data for reanalyzed files with stored data for unchanged files.
++
++9. **Populate PipelineResult metrics:**
++   - result.WasIncremental = true
++   - result.FilesSkipped = totalSolutionFiles - affectedFiles.Count
++   - result.FilesAnalyzed = affectedFiles.Count
++   - result.NotesWritten = emitResult.NotesWritten
++   - result.NotesDeleted = stale notes count
++
++10. **Progress display integration:**
++    - Before running analysis, calculate total files in solution (enumerate all .cs documents in the workspace).
++    - Update the Spectre.Console progress description: "Analyzing {analyzeCount}/{totalCount} files ({skipCount} unchanged)"
++    - Extract the progress wrapping into a helper so both the full-pipeline path and the direct-analyzer path use Spectre.Console progress.
++
++11. **Implementation note on two-pass approach:**
++    For pass 1 and pass 2, call analyzers directly in Program.cs, bypassing Pipeline.RunAsync:
++    - Open MSBuildWorkspace and load solution (reuse existing workspace open logic).
++    - Call MethodAnalyzer.AnalyzeAsync(solution, progress, ct) and TypeAnalyzer.AnalyzeAsync(solution, progress, ct) with filtered analyzers.
++    - For emission: call the emitter directly or use a stripped-down pipeline call.
++    The cleanest approach: non-incremental mode uses existing Pipeline.RunAsync (unchanged). Incremental mode orchestrates directly in Program.cs, calling analyzers + enricher + emitter in sequence.
++
++12. Update `Program.cs` -- Case E (--dry-run with --incremental):
++    - Perform all steps of Case C up through ripple computation and stale detection, but skip emission entirely.
++    - Print: "Would regenerate {N} notes ({M} from changed files, {K} from ripple)."
++    - Print: "Would delete {N} stale notes."
++    - Print list of affected files.
++    - Return exit code 0 without modifying the vault or state.
++    - If --dry-run is used without --incremental, log a warning: "--dry-run only works with --incremental. Running full analysis." and proceed normally.
++  </action>
++  <verify>
++- `dotnet build` succeeds with no errors.
++- Non-incremental `dotnet run -- <solution>` produces same output as before (regression).
++- With --incremental on first run: full analysis completes, `.code2obsidian-state.db` created (verified in Task 2).
++- With --incremental on second run (no changes): "No changes detected" message, fast exit.
++- With --incremental after modifying one file: only affected notes regenerated (code paths for pass 1, ripple, pass 2, merge, selective emit, stale cleanup are all reachable).
++- With --dry-run --incremental: shows what would be regenerated without writing.
++  </verify>
++  <done>
++Full incremental orchestration wired: --incremental detects git changes (with hash fallback), runs two-pass analysis on affected files, merges with stored data, emits only dirty notes, handles git renames, cleans stale notes, and saves state after success. --dry-run shows what would happen without modifying vault or state. Progress display shows "Analyzing X/Y files (Z unchanged)".
++  </done>
++</task>
++
++</tasks>
++
++<verification>
++- `dotnet build` succeeds
++- `dotnet run -- --help` shows --incremental, --full-rebuild, --dry-run flags
++- Non-incremental `dotnet run -- <solution>` produces same output as before (regression)
++- With --incremental on first run: full analysis completes, `.code2obsidian-state.db` is created in output dir
++- With --incremental on second run (no changes): "No changes detected" message, fast exit
++- With --incremental after modifying one file: only affected notes regenerated
++- With --full-rebuild: state wiped, full analysis performed, new state saved
++- With --dry-run --incremental: shows what would be regenerated without writing
++- Stale notes from deleted entities are removed from vault
++</verification>
++
++<success_criteria>
++- All three INFR requirements verified:
++  - INFR-03: --incremental only regenerates changed + ripple notes
++  - INFR-04: Git diff against stored commit SHA drives change detection
++  - INFR-05: First run with no state performs full analysis gracefully
++- State saved only after successful emission (transaction boundary)
++- Git-primary with hash fallback for non-git repos
++- Two-pass analysis: pass 1 for changed files, pass 2 for ripple expansion
++- Stale notes automatically deleted
++- Progress shows "Analyzing X/Y files (Z unchanged)"
++- --full-rebuild and --dry-run work correctly
++</success_criteria>
++
++<output>
++After completion, create `.planning/phases/04-incremental-mode/04-03-SUMMARY.md`
++</output>

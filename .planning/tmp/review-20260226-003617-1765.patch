@@ -1,0 +1,804 @@
+diff --git a/.planning/STATE.md b/.planning/STATE.md
+index 253893f..b3fe2e2 100644
+--- a/.planning/STATE.md
++++ b/.planning/STATE.md
+@@ -9,19 +9,19 @@ See: .planning/PROJECT.md (updated 2026-02-25)
+ 
+ ## Current Position
+ 
+-Phase: 3 of 5 (Output Quality & Metrics)
+-Plan: 1 of 2 in current phase
+-Status: Executing phase 03 plans
+-Last activity: 2026-02-26 -- Completed 03-01 (metadata fields + cyclomatic complexity)
++Phase: 3 of 5 (Output Quality & Metrics) -- COMPLETE
++Plan: 2 of 2 in current phase -- COMPLETE
++Status: Phase 03 complete, ready for Phase 04
++Last activity: 2026-02-26 -- Completed 03-02 (output quality, frontmatter, wikilinks, danger callouts)
+ 
+-Progress: [#####.....] 50%
++Progress: [######....] 60%
+ 
+ ## Performance Metrics
+ 
+ **Velocity:**
+-- Total plans completed: 5
+-- Average duration: 4.6 min
+-- Total execution time: 0.38 hours
++- Total plans completed: 6
++- Average duration: 4.5 min
++- Total execution time: 0.45 hours
+ 
+ **By Phase:**
+ 
+@@ -29,11 +29,11 @@ Progress: [#####.....] 50%
+ |-------|-------|-------|----------|
+ | 01 | 2 | 11 min | 5.5 min |
+ | 02 | 2 | 8 min | 4 min |
+-| 03 | 1 | 4 min | 4 min |
++| 03 | 2 | 8 min | 4 min |
+ 
+ **Recent Trend:**
+-- Last 5 plans: 01-02 (6 min), 02-01 (5 min), 02-02 (3 min), 03-01 (4 min)
+-- Trend: improving
++- Last 5 plans: 02-01 (5 min), 02-02 (3 min), 03-01 (4 min), 03-02 (4 min)
++- Trend: stable
+ 
+ ## Accumulated Context
+ 
+@@ -62,6 +62,10 @@ Recent decisions affecting current work:
+ - [03-01]: Expression-bodied methods handled via MethodDeclarationSyntax cast for ExpressionBody access
+ - [03-01]: ShouldDescend pruning excludes lambdas, local functions, anonymous methods from complexity count
+ - [03-01]: Metadata propagation: project.Name flows through analyzer to domain model
++- [03-02]: Collision detection scans both Types and Methods for containing type name disambiguation
++- [03-02]: Pattern detection uses case-insensitive suffix matching (6 patterns: repository, controller, service, middleware, factory, handler)
++- [03-02]: Interface notes hardcode dependency_count: 0 since interfaces have no DI constructors
++- [03-02]: Type wikilinks in class body also use collision-aware resolution via ResolveTypeWikilink
+ 
+ ### Pending Todos
+ 
+@@ -74,5 +78,5 @@ None yet.
+ ## Session Continuity
+ 
+ Last session: 2026-02-26
+-Stopped at: Completed 03-01-PLAN.md
+-Resume file: .planning/phases/03-output-quality-metrics/03-02-PLAN.md
++Stopped at: Completed 03-02-PLAN.md (Phase 03 complete)
++Resume file: Phase 04 planning
+diff --git a/.planning/phases/03-output-quality-metrics/03-02-SUMMARY.md b/.planning/phases/03-output-quality-metrics/03-02-SUMMARY.md
+new file mode 100644
+index 0000000..c429675
+--- /dev/null
++++ b/.planning/phases/03-output-quality-metrics/03-02-SUMMARY.md
+@@ -0,0 +1,117 @@
++---
++phase: 03-output-quality-metrics
++plan: 02
++subsystem: emission
++tags: [obsidian, frontmatter, wikilinks, dataview, danger-callouts, pattern-detection]
++
++# Dependency graph
++requires:
++  - phase: 03-output-quality-metrics
++    plan: 01
++    provides: "MethodInfo with Namespace, ProjectName, AccessModifier, CyclomaticComplexity; TypeInfo with ProjectName, AccessModifier"
++provides:
++  - "Expanded YAML frontmatter for method, class, and interface notes (Dataview-compatible)"
++  - "Collision-free wikilinks defaulting to [[ClassName.MethodName]] with namespace fallback"
++  - "Danger callout blocks for high fan-in and high complexity methods"
++  - "Architectural pattern detection and tagging via type name suffix matching"
++  - "CLI --fan-in-threshold and --complexity-threshold options"
++affects: [04-incremental-mode, 05-llm-enrichment, dataview-queries]
++
++# Tech tracking
++tech-stack:
++  added: []
++  patterns: ["collision-set building for wikilink disambiguation", "suffix-based pattern detection"]
++
++key-files:
++  created: []
++  modified:
++    - "Emission/ObsidianEmitter.cs"
++    - "Cli/CliOptions.cs"
++    - "Program.cs"
++
++key-decisions:
++  - "Collision detection scans both Types and Methods to catch containing type names not in TypeInfo"
++  - "Pattern detection uses case-insensitive suffix matching against 6 known architectural patterns"
++  - "Interface notes hardcode dependency_count: 0 since interfaces have no DI constructors"
++  - "Type wikilinks in class body (inherits, implements, implementors) also use collision-aware resolution"
++
++patterns-established:
++  - "Collision-free wikilink resolution: BuildCollisionSet -> IsCollision -> ResolveMethodWikilink/ResolveTypeWikilink"
++  - "Pattern detection via static suffix table with (Suffix, Pattern) tuples"
++
++requirements-completed: [STRC-07, OUTP-01, OUTP-02, OUTP-03, OUTP-04, OUTP-05, OUTP-06]
++
++# Metrics
++duration: 4min
++completed: 2026-02-26
++---
++
++# Phase 3 Plan 2: Output Quality & Metrics Summary
++
++**Enriched ObsidianEmitter with Dataview-compatible YAML frontmatter, collision-free wikilinks, danger callouts for high-risk methods, architectural pattern tags, and configurable CLI thresholds**
++
++## Performance
++
++- **Duration:** 4 min
++- **Started:** 2026-02-26T08:30:24Z
++- **Completed:** 2026-02-26T08:33:58Z
++- **Tasks:** 2
++- **Files modified:** 3
++
++## Accomplishments
++- Method notes now have 8 frontmatter fields (namespace, project, source_file, access_modifier, complexity, fan_in, fan_out, tags) enabling rich Dataview queries
++- Class notes have 10 frontmatter fields including pattern detection and dependency count
++- Interface notes mirror class frontmatter with dependency_count hardcoded to 0
++- Wikilinks default to short [[ClassName.MethodName]] with automatic namespace-qualified fallback when class names collide across namespaces
++- Danger callout blocks (> [!danger]) highlight high fan-in and high complexity methods visually in the vault
++- Pattern detection tags classes/interfaces matching Repository, Controller, Service, Middleware, Factory, Handler suffixes
++- CLI accepts --fan-in-threshold (default 10) and --complexity-threshold (default 15) to configure danger tagging
++
++## Task Commits
++
++Each task was committed atomically:
++
++1. **Task 1: Expand ObsidianEmitter with rich frontmatter, wikilink fix, danger callouts, and pattern detection** - `0a0fe2c` (feat)
++2. **Task 2: Wire CLI threshold options and pass to emitter** - `8543f45` (feat)
++
++## Files Created/Modified
++- `Emission/ObsidianEmitter.cs` - Expanded with rich frontmatter, collision-free wikilinks, danger callouts, pattern detection, fan-in/fan-out computation
++- `Cli/CliOptions.cs` - Extended with FanInThreshold and ComplexityThreshold parameters
++- `Program.cs` - Added --fan-in-threshold and --complexity-threshold CLI options wired to ObsidianEmitter
++
++## Decisions Made
++- Collision detection scans both Types and Methods dictionaries to ensure containing type names without their own TypeInfo are still checked for collisions
++- Pattern detection uses case-insensitive suffix matching against 6 architectural patterns (repository, controller, service, middleware, factory, handler)
++- Interface notes hardcode dependency_count: 0 since interfaces have no DI constructors
++- Type wikilinks in class body sections (inherits from, implements, known implementors) also use collision-aware resolution via ResolveTypeWikilink
++
++## Deviations from Plan
++
++None - plan executed exactly as written.
++
++## Issues Encountered
++
++None.
++
++## User Setup Required
++
++None - no external service configuration required.
++
++## Next Phase Readiness
++- All Phase 3 requirements (STRC-07, OUTP-01 through OUTP-06) are satisfied
++- Vault output is now a fully queryable knowledge base for Dataview
++- Danger callouts and pattern tags enable architectural navigation and risk identification
++- CLI thresholds allow per-project tuning of danger sensitivity
++- Ready for Phase 4 (Incremental Mode) which builds on this output format
++
++## Self-Check: PASSED
++
++- All 3 modified files verified present on disk
++- Commit 0a0fe2c (Task 1) verified in git log
++- Commit 8543f45 (Task 2) verified in git log
++- Build: 0 errors, 0 warnings
++- CLI --help confirms --fan-in-threshold and --complexity-threshold options visible
++
++---
++*Phase: 03-output-quality-metrics*
++*Completed: 2026-02-26*
+diff --git a/Cli/CliOptions.cs b/Cli/CliOptions.cs
+index 80c4784..5c3e242 100644
+--- a/Cli/CliOptions.cs
++++ b/Cli/CliOptions.cs
+@@ -4,5 +4,11 @@ namespace Code2Obsidian.Cli;
+ /// Strongly-typed CLI options record, created AFTER input resolution.
+ /// SolutionPath is the resolved absolute path to the .sln file.
+ /// OutputDirectory is the resolved absolute path to the output vault folder.
++/// FanInThreshold is the fan-in count at which methods get danger-tagged (default 10).
++/// ComplexityThreshold is the cyclomatic complexity at which methods get danger-tagged (default 15).
+ /// </summary>
+-public sealed record CliOptions(string SolutionPath, string OutputDirectory);
++public sealed record CliOptions(
++    string SolutionPath,
++    string OutputDirectory,
++    int FanInThreshold = 10,
++    int ComplexityThreshold = 15);
+diff --git a/Emission/ObsidianEmitter.cs b/Emission/ObsidianEmitter.cs
+index 43a8107..af7b60d 100644
+--- a/Emission/ObsidianEmitter.cs
++++ b/Emission/ObsidianEmitter.cs
+@@ -10,9 +10,33 @@ namespace Code2Obsidian.Emission;
+ /// Emits one .md file per method, one per class/struct/record, and one per interface.
+ /// Class notes are hub pages linking to methods, base classes, interfaces, and DI dependencies.
+ /// Interface notes include "Known Implementors" sections.
++/// Produces expanded YAML frontmatter with Dataview-compatible fields, collision-free wikilinks,
++/// danger callouts for high-risk methods, and architectural pattern tags.
+ /// </summary>
+ public sealed class ObsidianEmitter : IEmitter
+ {
++    private readonly int _fanInThreshold;
++    private readonly int _complexityThreshold;
++
++    /// <summary>
++    /// Pattern suffix table for architectural pattern detection.
++    /// </summary>
++    private static readonly (string Suffix, string Pattern)[] PatternSuffixes =
++    {
++        ("Repository", "repository"),
++        ("Controller", "controller"),
++        ("Service", "service"),
++        ("Middleware", "middleware"),
++        ("Factory", "factory"),
++        ("Handler", "handler"),
++    };
++
++    public ObsidianEmitter(int fanInThreshold = 10, int complexityThreshold = 15)
++    {
++        _fanInThreshold = fanInThreshold;
++        _complexityThreshold = complexityThreshold;
++    }
++
+     public async Task<EmitResult> EmitAsync(
+         EnrichedResult result,
+         string outputDirectory,
+@@ -24,17 +48,24 @@ public sealed class ObsidianEmitter : IEmitter
+ 
+         Directory.CreateDirectory(outputDirectory);
+ 
++        // Build collision set: short class names that appear more than once across different namespaces
++        var collisionSet = BuildCollisionSet(analysis);
++
+         // Emit method notes
+         foreach (var (methodId, method) in analysis.Methods)
+         {
+             ct.ThrowIfCancellationRequested();
+ 
+-            var fileName = Sanitize($"{method.ContainingTypeName}.{method.Name}.md");
++            var shortClassName = GetShortClassName(method.ContainingTypeName);
++            var noteBaseName = IsCollision(shortClassName, collisionSet)
++                ? $"{method.ContainingTypeName}.{method.Name}"
++                : $"{shortClassName}.{method.Name}";
++            var fileName = Sanitize($"{noteBaseName}.md");
+             var filePath = Path.Combine(outputDirectory, fileName);
+ 
+             try
+             {
+-                var content = RenderMethodNote(method, analysis.CallGraph);
++                var content = RenderMethodNote(method, analysis, collisionSet);
+                 await File.WriteAllTextAsync(filePath, content, ct);
+                 notesWritten++;
+             }
+@@ -49,14 +80,18 @@ public sealed class ObsidianEmitter : IEmitter
+         {
+             ct.ThrowIfCancellationRequested();
+ 
+-            var fileName = Sanitize($"{typeInfo.FullName}.md");
++            var shortClassName = GetShortClassName(typeInfo.FullName);
++            var noteBaseName = IsCollision(shortClassName, collisionSet)
++                ? typeInfo.FullName
++                : shortClassName;
++            var fileName = Sanitize($"{noteBaseName}.md");
+             var filePath = Path.Combine(outputDirectory, fileName);
+ 
+             try
+             {
+                 var content = typeInfo.Kind == TypeKindInfo.Interface
+-                    ? RenderInterfaceNote(typeInfo, analysis)
+-                    : RenderClassNote(typeInfo, analysis);
++                    ? RenderInterfaceNote(typeInfo, analysis, collisionSet)
++                    : RenderClassNote(typeInfo, analysis, collisionSet);
+                 await File.WriteAllTextAsync(filePath, content, ct);
+                 notesWritten++;
+             }
+@@ -70,42 +105,153 @@ public sealed class ObsidianEmitter : IEmitter
+     }
+ 
+     /// <summary>
+-    /// Renders a complete markdown note for a single method with YAML frontmatter,
+-    /// header, signature, doc comment, and call graph links.
+-    /// Ported from Program.cs RenderMethodNote (lines 222-239).
++    /// Builds a set of short class names that appear more than once across different namespaces.
++    /// When a short name collides, wikilinks and file names must use the namespace-qualified form.
++    /// </summary>
++    private static HashSet<string> BuildCollisionSet(AnalysisResult analysis)
++    {
++        // Map short name -> set of namespaces it appears in
++        var nameToNamespaces = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
++
++        foreach (var typeInfo in analysis.Types.Values)
++        {
++            var shortName = typeInfo.Name;
++            if (!nameToNamespaces.TryGetValue(shortName, out var namespaces))
++            {
++                namespaces = new HashSet<string>(StringComparer.Ordinal);
++                nameToNamespaces[shortName] = namespaces;
++            }
++            namespaces.Add(typeInfo.Namespace);
++        }
++
++        // Also scan methods for containing type names that might not have their own TypeInfo
++        foreach (var method in analysis.Methods.Values)
++        {
++            var shortName = GetShortClassName(method.ContainingTypeName);
++            if (!nameToNamespaces.TryGetValue(shortName, out var namespaces))
++            {
++                namespaces = new HashSet<string>(StringComparer.Ordinal);
++                nameToNamespaces[shortName] = namespaces;
++            }
++            namespaces.Add(method.Namespace);
++        }
++
++        var collisionSet = new HashSet<string>(StringComparer.Ordinal);
++        foreach (var (shortName, namespaces) in nameToNamespaces)
++        {
++            if (namespaces.Count > 1)
++                collisionSet.Add(shortName);
++        }
++
++        return collisionSet;
++    }
++
++    /// <summary>
++    /// Returns true if the short class name is in the collision set.
+     /// </summary>
+-    private static string RenderMethodNote(MethodInfo method, CallGraph callGraph)
++    private static bool IsCollision(string shortClassName, HashSet<string> collisionSet)
++    {
++        return collisionSet.Contains(shortClassName);
++    }
++
++    /// <summary>
++    /// Extracts the short class name from a potentially fully-qualified name.
++    /// E.g., "Namespace.ClassName" -> "ClassName", "ClassName" -> "ClassName"
++    /// </summary>
++    private static string GetShortClassName(string fullName)
++    {
++        var lastDot = fullName.LastIndexOf('.');
++        return lastDot < 0 ? fullName : fullName.Substring(lastDot + 1);
++    }
++
++    /// <summary>
++    /// Detects an architectural pattern based on type name suffix.
++    /// Returns the pattern name (e.g., "repository") or null if no pattern matches.
++    /// </summary>
++    private static string? DetectPattern(string typeName)
++    {
++        foreach (var (suffix, pattern) in PatternSuffixes)
++        {
++            if (typeName.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
++                return pattern;
++        }
++        return null;
++    }
++
++    /// <summary>
++    /// Renders a complete markdown note for a single method with expanded YAML frontmatter,
++    /// danger callouts for high-risk methods, header, signature, doc comment, and call graph links.
++    /// </summary>
++    private string RenderMethodNote(MethodInfo method, AnalysisResult analysis, HashSet<string> collisionSet)
+     {
+         var sb = new StringBuilder();
++        var callGraph = analysis.CallGraph;
+ 
+-        // YAML frontmatter
++        // Compute fan-in and fan-out from the call graph
++        var fanIn = callGraph.GetCallers(method.Id).Count;
++        var fanOut = callGraph.GetCallees(method.Id).Count;
++
++        // YAML frontmatter with expanded fields
+         sb.AppendLine("---");
++        sb.AppendLine($"namespace: \"{method.Namespace}\"");
++        sb.AppendLine($"project: \"{method.ProjectName}\"");
++        sb.AppendLine($"source_file: \"{method.FilePath}\"");
++        sb.AppendLine($"access_modifier: \"{method.AccessModifier}\"");
++        sb.AppendLine($"complexity: {method.CyclomaticComplexity}");
++        sb.AppendLine($"fan_in: {fanIn}");
++        sb.AppendLine($"fan_out: {fanOut}");
+         sb.AppendLine("tags:");
+         sb.AppendLine("  - method");
++        if (fanIn >= _fanInThreshold)
++            sb.AppendLine("  - danger/high-fan-in");
++        if (method.CyclomaticComplexity >= _complexityThreshold)
++            sb.AppendLine("  - danger/high-complexity");
+         sb.AppendLine("---");
+ 
+         // Header
+-        sb.AppendLine($"# {method.ContainingTypeName}::{method.Name}");
++        var shortClassName = GetShortClassName(method.ContainingTypeName);
++        sb.AppendLine($"# {shortClassName}::{method.Name}");
+         sb.AppendLine($"**Path**: `{method.FilePath}`");
+         sb.AppendLine();
+ 
++        // Danger callouts (before method section)
++        if (fanIn >= _fanInThreshold)
++        {
++            sb.AppendLine($"> [!danger] High Fan-In ({fanIn})");
++            sb.AppendLine($"> This method is called by {fanIn} other methods. Changes here have wide impact.");
++            sb.AppendLine();
++        }
++
++        if (method.CyclomaticComplexity >= _complexityThreshold)
++        {
++            sb.AppendLine($"> [!danger] High Complexity ({method.CyclomaticComplexity})");
++            sb.AppendLine($"> Cyclomatic complexity: {method.CyclomaticComplexity}. Consider refactoring into smaller methods.");
++            sb.AppendLine();
++        }
++
+         // Method section (signature, doc, calls)
+-        sb.Append(RenderMethodSection(method, callGraph));
++        sb.Append(RenderMethodSection(method, analysis, collisionSet));
+ 
+         return sb.ToString();
+     }
+ 
+     /// <summary>
+     /// Renders a method section with signature, doc comment, and call graph links.
+-    /// Ported from Program.cs RenderMethodSection (lines 172-219).
+-    /// Adapted to use domain MethodInfo and CallGraph with string-based IDs.
++    /// Uses collision-free wikilinks: default [[ClassName.MethodName]], fallback [[Namespace.ClassName.MethodName]].
+     /// </summary>
+-    private static string RenderMethodSection(MethodInfo method, CallGraph callGraph)
++    private static string RenderMethodSection(MethodInfo method, AnalysisResult analysis, HashSet<string> collisionSet)
+     {
+         var sb = new StringBuilder();
++        var callGraph = analysis.CallGraph;
++
++        // Self-link header with collision-aware wikilink
++        var shortClassName = GetShortClassName(method.ContainingTypeName);
++        var selfLink = IsCollision(shortClassName, collisionSet)
++            ? Sanitize($"{method.ContainingTypeName}.{method.Name}")
++            : Sanitize($"{shortClassName}.{method.Name}");
+ 
+         sb.AppendLine();
+-        sb.AppendLine($"#### [[{method.Name}]]");
++        sb.AppendLine($"#### [[{selfLink}]]");
+         sb.AppendLine("##### What it does:");
+ 
+         if (!string.IsNullOrWhiteSpace(method.DocComment))
+@@ -135,9 +281,8 @@ public sealed class ObsidianEmitter : IEmitter
+             sb.AppendLine("**Calls ->**");
+             foreach (var callee in callees.OrderBy(c => c.Value))
+             {
+-                // Extract just the method name from the full ID for the wiki link
+-                var calleeName = ExtractMethodName(callee);
+-                sb.AppendLine($"- [[{calleeName}]]");
++                var wikilink = ResolveMethodWikilink(callee, analysis, collisionSet);
++                sb.AppendLine($"- [[{wikilink}]]");
+             }
+             sb.AppendLine();
+         }
+@@ -149,8 +294,8 @@ public sealed class ObsidianEmitter : IEmitter
+             sb.AppendLine("**Called-by <-**");
+             foreach (var caller in callers.OrderBy(c => c.Value))
+             {
+-                var callerName = ExtractMethodName(caller);
+-                sb.AppendLine($"- [[{callerName}]]");
++                var wikilink = ResolveMethodWikilink(caller, analysis, collisionSet);
++                sb.AppendLine($"- [[{wikilink}]]");
+             }
+             sb.AppendLine();
+         }
+@@ -158,6 +303,36 @@ public sealed class ObsidianEmitter : IEmitter
+         return sb.ToString();
+     }
+ 
++    /// <summary>
++    /// Resolves a MethodId to a collision-free wikilink string.
++    /// Default: ClassName.MethodName. Fallback for collisions: Namespace.ClassName.MethodName.
++    /// Falls back to ExtractMethodName for external methods not in the analysis.
++    /// </summary>
++    private static string ResolveMethodWikilink(MethodId methodId, AnalysisResult analysis, HashSet<string> collisionSet)
++    {
++        if (analysis.Methods.TryGetValue(methodId, out var methodInfo))
++        {
++            var shortClassName = GetShortClassName(methodInfo.ContainingTypeName);
++            return IsCollision(shortClassName, collisionSet)
++                ? Sanitize($"{methodInfo.ContainingTypeName}.{methodInfo.Name}")
++                : Sanitize($"{shortClassName}.{methodInfo.Name}");
++        }
++
++        // External method: fall back to just the method name
++        return ExtractMethodName(methodId);
++    }
++
++    /// <summary>
++    /// Resolves a type to a collision-free wikilink string.
++    /// Default: ClassName. Fallback for collisions: Namespace.ClassName.
++    /// </summary>
++    private static string ResolveTypeWikilink(TypeInfo typeInfo, HashSet<string> collisionSet)
++    {
++        return IsCollision(typeInfo.Name, collisionSet)
++            ? Sanitize(typeInfo.FullName)
++            : Sanitize(typeInfo.Name);
++    }
++
+     /// <summary>
+     /// Extracts the method name portion from a fully qualified MethodId.
+     /// E.g., "Namespace.Class.Method(params)" -> "Method"
+@@ -178,10 +353,10 @@ public sealed class ObsidianEmitter : IEmitter
+ 
+     /// <summary>
+     /// Renders a complete markdown note for a class, record, or struct type.
+-    /// Includes YAML frontmatter, purpose summary, inheritance wikilinks,
+-    /// DI dependencies, properties/fields, and member index.
++    /// Includes expanded YAML frontmatter with pattern detection, purpose summary,
++    /// inheritance wikilinks, DI dependencies, properties/fields, and member index.
+     /// </summary>
+-    private static string RenderClassNote(TypeInfo typeInfo, AnalysisResult analysis)
++    private static string RenderClassNote(TypeInfo typeInfo, AnalysisResult analysis, HashSet<string> collisionSet)
+     {
+         var sb = new StringBuilder();
+ 
+@@ -189,8 +364,23 @@ public sealed class ObsidianEmitter : IEmitter
+         var knownTypes = new HashSet<string>(
+             analysis.Types.Values.Select(t => t.FullName));
+ 
+-        // YAML frontmatter (Phase 2 minimal set)
++        // Compute DI dependencies (needed for frontmatter and body)
++        var diDeps = typeInfo.Constructors
++            .SelectMany(c => c.Parameters)
++            .Where(p => p.TypeNoteFullName is not null)
++            .GroupBy(p => p.TypeNoteFullName!)
++            .Select(g => g.First())
++            .ToList();
++
++        // Pattern detection
++        var detectedPattern = DetectPattern(typeInfo.Name);
++
++        // YAML frontmatter with expanded fields
+         sb.AppendLine("---");
++        sb.AppendLine($"namespace: \"{typeInfo.Namespace}\"");
++        sb.AppendLine($"project: \"{typeInfo.ProjectName}\"");
++        sb.AppendLine($"source_file: \"{typeInfo.FilePath}\"");
++        sb.AppendLine($"access_modifier: \"{typeInfo.AccessModifier}\"");
+         sb.AppendLine(typeInfo.BaseClassFullName is not null
+             ? $"base_class: \"{typeInfo.BaseClassFullName}\""
+             : "base_class: ~");
+@@ -204,8 +394,15 @@ public sealed class ObsidianEmitter : IEmitter
+         {
+             sb.AppendLine("interfaces: []");
+         }
+-        sb.AppendLine($"namespace: \"{typeInfo.Namespace}\"");
+-        sb.AppendLine($"source_file: \"{typeInfo.FilePath}\"");
++        sb.AppendLine($"member_count: {typeInfo.MethodIds.Count}");
++        sb.AppendLine($"dependency_count: {diDeps.Count}");
++        sb.AppendLine(detectedPattern is not null
++            ? $"pattern: \"{detectedPattern}\""
++            : "pattern: ~");
++        sb.AppendLine("tags:");
++        sb.AppendLine("  - class");
++        if (detectedPattern is not null)
++            sb.AppendLine($"  - pattern/{detectedPattern}");
+         sb.AppendLine("---");
+         sb.AppendLine();
+ 
+@@ -232,9 +429,18 @@ public sealed class ObsidianEmitter : IEmitter
+         if (typeInfo.BaseClassFullName is not null)
+         {
+             if (knownTypes.Contains(typeInfo.BaseClassFullName))
+-                sb.AppendLine($"**Inherits from**: [[{Sanitize(typeInfo.BaseClassFullName)}]]");
++            {
++                // Find the base type to resolve its wikilink
++                var baseType = analysis.Types.Values.FirstOrDefault(t => t.FullName == typeInfo.BaseClassFullName);
++                var baseWikilink = baseType is not null
++                    ? ResolveTypeWikilink(baseType, collisionSet)
++                    : Sanitize(typeInfo.BaseClassFullName);
++                sb.AppendLine($"**Inherits from**: [[{baseWikilink}]]");
++            }
+             else
++            {
+                 sb.AppendLine($"**Inherits from**: {typeInfo.BaseClassName}");
++            }
+             sb.AppendLine();
+         }
+ 
+@@ -246,21 +452,22 @@ public sealed class ObsidianEmitter : IEmitter
+                 var fullName = typeInfo.InterfaceFullNames[i];
+                 var displayName = typeInfo.InterfaceNames[i];
+                 if (knownTypes.Contains(fullName))
+-                    sb.AppendLine($"- [[{Sanitize(fullName)}]]");
++                {
++                    var ifaceType = analysis.Types.Values.FirstOrDefault(t => t.FullName == fullName);
++                    var ifaceWikilink = ifaceType is not null
++                        ? ResolveTypeWikilink(ifaceType, collisionSet)
++                        : Sanitize(fullName);
++                    sb.AppendLine($"- [[{ifaceWikilink}]]");
++                }
+                 else
++                {
+                     sb.AppendLine($"- {displayName}");
++                }
+             }
+             sb.AppendLine();
+         }
+ 
+         // Dependencies section (DI from all constructors, deduped by TypeNoteFullName)
+-        var diDeps = typeInfo.Constructors
+-            .SelectMany(c => c.Parameters)
+-            .Where(p => p.TypeNoteFullName is not null)
+-            .GroupBy(p => p.TypeNoteFullName!)
+-            .Select(g => g.First())
+-            .ToList();
+-
+         if (diDeps.Count > 0)
+         {
+             sb.AppendLine("## Dependencies");
+@@ -282,7 +489,7 @@ public sealed class ObsidianEmitter : IEmitter
+             sb.AppendLine();
+         }
+ 
+-        // Members section (compact wikilink index)
++        // Members section (compact wikilink index with collision awareness)
+         if (typeInfo.MethodIds.Count > 0)
+         {
+             sb.AppendLine("## Members");
+@@ -290,7 +497,7 @@ public sealed class ObsidianEmitter : IEmitter
+             {
+                 if (analysis.Methods.TryGetValue(methodId, out var methodInfo))
+                 {
+-                    var wikilink = Sanitize($"{methodInfo.ContainingTypeName}.{methodInfo.Name}");
++                    var wikilink = ResolveMethodWikilink(methodId, analysis, collisionSet);
+                     sb.AppendLine($"- [[{wikilink}]]");
+                 }
+             }
+@@ -303,17 +510,24 @@ public sealed class ObsidianEmitter : IEmitter
+     /// <summary>
+     /// Renders a complete markdown note for an interface type.
+     /// Same structure as class notes, but includes "Known Implementors" section
+-    /// and omits the Dependencies section (interfaces have no constructors with DI).
++    /// and sets dependency_count to 0 (interfaces have no constructors with DI).
+     /// </summary>
+-    private static string RenderInterfaceNote(TypeInfo typeInfo, AnalysisResult analysis)
++    private static string RenderInterfaceNote(TypeInfo typeInfo, AnalysisResult analysis, HashSet<string> collisionSet)
+     {
+         var sb = new StringBuilder();
+ 
+         var knownTypes = new HashSet<string>(
+             analysis.Types.Values.Select(t => t.FullName));
+ 
+-        // YAML frontmatter
++        // Pattern detection (interfaces can have patterns too, e.g., IRepository)
++        var detectedPattern = DetectPattern(typeInfo.Name);
++
++        // YAML frontmatter with expanded fields
+         sb.AppendLine("---");
++        sb.AppendLine($"namespace: \"{typeInfo.Namespace}\"");
++        sb.AppendLine($"project: \"{typeInfo.ProjectName}\"");
++        sb.AppendLine($"source_file: \"{typeInfo.FilePath}\"");
++        sb.AppendLine($"access_modifier: \"{typeInfo.AccessModifier}\"");
+         sb.AppendLine(typeInfo.BaseClassFullName is not null
+             ? $"base_class: \"{typeInfo.BaseClassFullName}\""
+             : "base_class: ~");
+@@ -327,8 +541,15 @@ public sealed class ObsidianEmitter : IEmitter
+         {
+             sb.AppendLine("interfaces: []");
+         }
+-        sb.AppendLine($"namespace: \"{typeInfo.Namespace}\"");
+-        sb.AppendLine($"source_file: \"{typeInfo.FilePath}\"");
++        sb.AppendLine($"member_count: {typeInfo.MethodIds.Count}");
++        sb.AppendLine("dependency_count: 0");
++        sb.AppendLine(detectedPattern is not null
++            ? $"pattern: \"{detectedPattern}\""
++            : "pattern: ~");
++        sb.AppendLine("tags:");
++        sb.AppendLine("  - interface");
++        if (detectedPattern is not null)
++            sb.AppendLine($"  - pattern/{detectedPattern}");
+         sb.AppendLine("---");
+         sb.AppendLine();
+ 
+@@ -360,9 +581,17 @@ public sealed class ObsidianEmitter : IEmitter
+                 var fullName = typeInfo.InterfaceFullNames[i];
+                 var displayName = typeInfo.InterfaceNames[i];
+                 if (knownTypes.Contains(fullName))
+-                    sb.AppendLine($"- [[{Sanitize(fullName)}]]");
++                {
++                    var ifaceType = analysis.Types.Values.FirstOrDefault(t => t.FullName == fullName);
++                    var ifaceWikilink = ifaceType is not null
++                        ? ResolveTypeWikilink(ifaceType, collisionSet)
++                        : Sanitize(fullName);
++                    sb.AppendLine($"- [[{ifaceWikilink}]]");
++                }
+                 else
++                {
+                     sb.AppendLine($"- {displayName}");
++                }
+             }
+             sb.AppendLine();
+         }
+@@ -376,7 +605,7 @@ public sealed class ObsidianEmitter : IEmitter
+             sb.AppendLine();
+         }
+ 
+-        // Members section
++        // Members section with collision-aware wikilinks
+         if (typeInfo.MethodIds.Count > 0)
+         {
+             sb.AppendLine("## Members");
+@@ -384,7 +613,7 @@ public sealed class ObsidianEmitter : IEmitter
+             {
+                 if (analysis.Methods.TryGetValue(methodId, out var methodInfo))
+                 {
+-                    var wikilink = Sanitize($"{methodInfo.ContainingTypeName}.{methodInfo.Name}");
++                    var wikilink = ResolveMethodWikilink(methodId, analysis, collisionSet);
+                     sb.AppendLine($"- [[{wikilink}]]");
+                 }
+             }
+@@ -401,7 +630,8 @@ public sealed class ObsidianEmitter : IEmitter
+             {
+                 if (analysis.Types.TryGetValue(implId, out var implType))
+                 {
+-                    sb.AppendLine($"- [[{Sanitize(implType.FullName)}]]");
++                    var implWikilink = ResolveTypeWikilink(implType, collisionSet);
++                    sb.AppendLine($"- [[{implWikilink}]]");
+                 }
+             }
+             sb.AppendLine();
+@@ -418,7 +648,6 @@ public sealed class ObsidianEmitter : IEmitter
+ 
+     /// <summary>
+     /// Sanitizes a string for use as a file name by replacing invalid characters.
+-    /// Ported from Program.cs Sanitize() (lines 362-368).
+     /// </summary>
+     private static string Sanitize(string name)
+     {
+diff --git a/Program.cs b/Program.cs
+index a99426e..f01ba56 100644
+--- a/Program.cs
++++ b/Program.cs
+@@ -24,18 +24,34 @@ internal static class Program
+             Description = "Output directory for the Obsidian vault (default: <solution-dir>/vault/)"
+         };
+ 
++        var fanInThresholdOption = new Option<int>("--fan-in-threshold")
++        {
++            Description = "Fan-in threshold for danger tagging (default: 10)",
++            DefaultValueFactory = _ => 10
++        };
++
++        var complexityThresholdOption = new Option<int>("--complexity-threshold")
++        {
++            Description = "Cyclomatic complexity threshold for danger tagging (default: 15)",
++            DefaultValueFactory = _ => 15
++        };
++
+         var rootCommand = new RootCommand("Analyze a C# solution and generate an Obsidian vault")
+         {
+             inputArgument,
+-            outputOption
++            outputOption,
++            fanInThresholdOption,
++            complexityThresholdOption
+         };
+ 
+         rootCommand.SetAction(async (parseResult, cancellationToken) =>
+         {
+             var input = parseResult.GetValue(inputArgument)!;
+             var output = parseResult.GetValue(outputOption);
++            var fanInThreshold = parseResult.GetValue(fanInThresholdOption);
++            var complexityThreshold = parseResult.GetValue(complexityThresholdOption);
+ 
+-            return await RunPipelineAsync(input, output, cancellationToken);
++            return await RunPipelineAsync(input, output, fanInThreshold, complexityThreshold, cancellationToken);
+         });
+ 
+         var parseResult = rootCommand.Parse(args);
+@@ -43,7 +59,7 @@ internal static class Program
+     }
+ 
+     private static async Task<int> RunPipelineAsync(
+-        string input, string? output, CancellationToken ct)
++        string input, string? output, int fanInThreshold, int complexityThreshold, CancellationToken ct)
+     {
+         try
+         {
+@@ -67,7 +83,7 @@ internal static class Program
+             // Compose pipeline (no DI container in Phase 1)
+             var analyzers = new List<IAnalyzer> { new MethodAnalyzer(), new TypeAnalyzer() };
+             var enrichers = new List<IEnricher>();
+-            var emitter = new ObsidianEmitter();
++            var emitter = new ObsidianEmitter(fanInThreshold, complexityThreshold);
+             var pipeline = new Pipeline.Pipeline(analyzers, enrichers, emitter);
+ 
+             // Run pipeline with Spectre.Console progress

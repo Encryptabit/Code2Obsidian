@@ -13,7 +13,8 @@ public static class InteractiveSetup
     {
         ["anthropic"] = "claude-haiku-4-5",
         ["openai"] = "gpt-4o-mini",
-        ["ollama"] = "llama3.1"
+        ["ollama"] = "llama3.1",
+        ["codex"] = "gpt-5-codex"
     };
 
     private static readonly Dictionary<string, string> DefaultEnvVars = new(StringComparer.OrdinalIgnoreCase)
@@ -40,7 +41,7 @@ public static class InteractiveSetup
         var provider = AnsiConsole.Prompt(
             new SelectionPrompt<string>()
                 .Title("Select an LLM [green]provider[/]:")
-                .AddChoices("anthropic", "openai", "ollama"));
+                .AddChoices("anthropic", "openai", "ollama", "codex"));
 
         // Model name
         var defaultModel = DefaultModels.GetValueOrDefault(provider, "");
@@ -55,6 +56,7 @@ public static class InteractiveSetup
         // Provider-specific prompts
         string? apiKey = null;
         string? endpoint = null;
+        string[]? endpoints = null;
 
         if (provider is "anthropic" or "openai")
         {
@@ -76,6 +78,30 @@ public static class InteractiveSetup
             if (string.IsNullOrWhiteSpace(endpoint))
                 endpoint = "http://localhost:11434";
         }
+        else if (provider == "codex")
+        {
+            var endpointInput = AnsiConsole.Prompt(
+                new TextPrompt<string>("Enter [green]Codex endpoint(s)[/] (comma-separated):")
+                    .DefaultValue("ws://localhost:8080")
+                    .AllowEmpty());
+
+            var splitEndpoints = endpointInput
+                .Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            if (splitEndpoints.Length == 0)
+            {
+                endpoint = "ws://localhost:8080";
+            }
+            else
+            {
+                endpoint = splitEndpoints[0];
+            }
+
+            endpoints = splitEndpoints.Length > 1 ? splitEndpoints : null;
+        }
 
         // Max concurrency
         var maxConcurrency = AnsiConsole.Prompt(
@@ -87,7 +113,8 @@ public static class InteractiveSetup
             Model: model,
             ApiKey: apiKey,
             Endpoint: endpoint,
-            MaxConcurrency: maxConcurrency
+            MaxConcurrency: maxConcurrency,
+            Endpoints: endpoints
         );
 
         LlmConfigLoader.Save(configPath, config);

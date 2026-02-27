@@ -1,0 +1,1245 @@
+diff --git a/.planning/STATE.md b/.planning/STATE.md
+index b8753f5..cc1dfaa 100644
+--- a/.planning/STATE.md
++++ b/.planning/STATE.md
+@@ -5,23 +5,23 @@
+ See: .planning/PROJECT.md (updated 2026-02-25)
+ 
+ **Core value:** A developer can point this tool at any C# solution and get an Obsidian vault that lets them understand what the code does, how it connects, and where the danger zones are -- without reading every file.
+-**Current focus:** Phase 5 - LLM Enrichment
++**Current focus:** Phase 05.1 - Structured XML Output & Progress Fix
+ 
+ ## Current Position
+ 
+-Phase: 5 of 5 (LLM Enrichment)
+-Plan: 3 of 3 in current phase -- COMPLETE
+-Status: Phase 05 COMPLETE -- All phases done
+-Last activity: 2026-02-26 -- Completed 05-03 (CLI integration and emitter wiring)
++Phase: 5.1 (Structured XML Output & Progress Fix)
++Plan: 2 of 2 in current phase -- COMPLETE
++Status: Phase 05.1 COMPLETE
++Last activity: 2026-02-26 -- Completed 05.1-02 (Progress Bar Layout Fix)
+ 
+ Progress: [############] 100%
+ 
+ ## Performance Metrics
+ 
+ **Velocity:**
+-- Total plans completed: 12
+-- Average duration: 7.8 min
+-- Total execution time: 1.59 hours
++- Total plans completed: 14
++- Average duration: 7.9 min
++- Total execution time: 1.95 hours
+ 
+ **By Phase:**
+ 
+@@ -32,10 +32,11 @@ Progress: [############] 100%
+ | 03 | 2 | 8 min | 4 min |
+ | 04 | 3 | 39 min | 13 min |
+ | 05 | 3 | 33 min | 11 min |
++| 05.1 | 2 | 22 min | 11 min |
+ 
+ **Recent Trend:**
+-- Last 5 plans: 04-03 (13 min), 05-01 (8 min), 05-02 (9 min), 05-03 (16 min)
+-- Trend: Final plan larger scope (7 files, CLI+pipeline+emitter) but still under 20 min
++- Last 5 plans: 05-02 (9 min), 05-03 (16 min), 05.1-01 (~11 min), 05.1-02 (11 min)
++- Trend: Consistent ~11 min for moderate scope plans
+ 
+ ## Accumulated Context
+ 
+@@ -89,6 +90,13 @@ Recent decisions affecting current work:
+ - [05-03]: LlmEnricher reconstructed per Spectre.Console progress context via BuildEnrichersWithProgress for correct IProgress wiring
+ - [05-03]: Cost confirmation Func callback injected from Program.cs to keep LlmEnricher free of Spectre.Console dependency
+ - [05-03]: ## Summary section placed after danger callouts (methods) and after source path (types) for prominent placement
++- [05.1-02]: AnsiConsole.Live() replaces Progress() to eliminate jitter from shared TaskDescriptionColumn resizing
++- [05.1-02]: Lock-serialized IProgress callbacks for thread-safe concurrent enrichment updates
++- [05.1-02]: RunFullPipeline delegates to RunWithProgress for single Live display implementation
++
++### Roadmap Evolution
++
++- Phase 05.1 inserted after Phase 5: Structured XML Output & Progress Fix (URGENT)
+ 
+ ### Pending Todos
+ 
+@@ -101,5 +109,5 @@ None yet.
+ ## Session Continuity
+ 
+ Last session: 2026-02-26
+-Stopped at: Completed 05-03-PLAN.md (Phase 05 complete, all phases done)
++Stopped at: Completed 05.1-02-PLAN.md (Phase 05.1 complete)
+ Resume file: N/A -- all plans executed
+diff --git a/.planning/phases/05.1-structured-xml-output-progress-fix/05.1-02-SUMMARY.md b/.planning/phases/05.1-structured-xml-output-progress-fix/05.1-02-SUMMARY.md
+new file mode 100644
+index 0000000..22f42e8
+--- /dev/null
++++ b/.planning/phases/05.1-structured-xml-output-progress-fix/05.1-02-SUMMARY.md
+@@ -0,0 +1,137 @@
++---
++phase: 05.1-structured-xml-output-progress-fix
++plan: "02"
++subsystem: infra
++tags: [spectre-console, live-display, progress-bar, jitter-fix]
++
++# Dependency graph
++requires:
++  - phase: "01"
++    provides: "IProgress<PipelineProgress> abstraction and pipeline stage reporting"
++  - phase: "05.1-01"
++    provides: "EnrichmentResponse structured type and XML system prompt"
++provides:
++  - "Jitter-free Live-based progress display with fixed-width character bars"
++  - "ProgressState/StageState types for stage tracking"
++  - "RenderProgressDisplay helper rendering Rows-based IRenderable"
++  - "Thread-safe progress updates via lock-serialized IProgress callbacks"
++affects: []
++
++# Tech tracking
++tech-stack:
++  added: []
++  patterns:
++    - "AnsiConsole.Live() for stable progress rendering instead of Progress()"
++    - "Lock-serialized IProgress<T> callbacks for thread-safe concurrent updates"
++    - "Fixed-width character bars (40 chars) with elapsed time tracking"
++
++key-files:
++  created: []
++  modified:
++    - "Program.cs"
++    - "Enrichment/LlmEnricher.cs"
++    - "Emission/ObsidianEmitter.cs"
++    - "Enrichment/Config/ChatClientFactory.cs"
++    - "Enrichment/Config/CodexChatClient.cs"
++
++key-decisions:
++  - "Live() over Progress(): eliminates shared column resizing that caused jitter"
++  - "Render lock for thread safety: serializes concurrent enrichment IProgress callbacks"
++  - "RunFullPipeline delegates to RunWithProgress for single display implementation"
++
++patterns-established:
++  - "Live display: all progress rendering goes through ProgressState.Update + RenderProgressDisplay"
++  - "XML response parsing with regex fallback: graceful degradation when LLM response lacks XML tags"
++
++requirements-completed: [INFR-02]
++
++# Metrics
++duration: 11min
++completed: 2026-02-26
++---
++
++# Phase 05.1 Plan 02: Progress Bar Layout Fix Summary
++
++**Replaced AnsiConsole.Progress() with Live() and fixed-width character bars to eliminate progress jitter from variable-length descriptions**
++
++## Performance
++
++- **Duration:** ~11 min
++- **Started:** 2026-02-26T22:35:12Z
++- **Completed:** 2026-02-26T22:45:44Z
++- **Tasks:** 2
++- **Files modified:** 5
++
++## Accomplishments
++- Added ProgressState/StageState types and RenderProgressDisplay helper with fixed-width 40-char bars
++- Replaced RunWithProgress and RunFullPipeline from AnsiConsole.Progress() to AnsiConsole.Live()
++- Deleted CreateProgress helper; all callers now pass IProgress<PipelineProgress> directly
++- Thread-safe Live display updates via lock serialization for concurrent enrichment tasks
++
++## Task Commits
++
++Each task was committed atomically:
++
++1. **Task 1: Add ProgressState types and RenderProgressDisplay helper** - `d60b115` (feat)
++2. **Task 2: Replace RunWithProgress, update callers, delete CreateProgress** - `a06dc1a` (feat)
++
++## Files Created/Modified
++- `Program.cs` - ProgressState/StageState types, RenderProgressDisplay, Live-based RunWithProgress, updated callers, deleted CreateProgress
++- `Enrichment/LlmEnricher.cs` - ParseXmlResponse method for structured XML parsing, fixed EnrichmentResponse type usage
++- `Emission/ObsidianEmitter.cs` - Render methods accept EnrichmentResponse instead of string, display Purpose field
++- `Enrichment/Config/ChatClientFactory.cs` - Updated factory (from 05.1-01 uncommitted changes)
++- `Enrichment/Config/CodexChatClient.cs` - New codex chat client (from 05.1-01 uncommitted changes)
++
++## Decisions Made
++- Used AnsiConsole.Live() instead of Progress() because Progress() auto-sizes TaskDescriptionColumn across all rows, causing jitter when descriptions change length
++- Implemented render lock (object + lock statement) rather than SemaphoreSlim for lower overhead on short critical sections
++- RunFullPipeline delegates to RunWithProgress rather than duplicating Live() setup, reducing code and ensuring consistent display
++
++## Deviations from Plan
++
++### Auto-fixed Issues
++
++**1. [Rule 3 - Blocking] Fixed incomplete 05.1-01 EnrichmentResponse type migration**
++- **Found during:** Task 1 (build verification)
++- **Issue:** Plan 05.1-01 changed MethodSummaries/TypeSummaries dictionaries from `string` to `EnrichmentResponse` but did not update consuming code in LlmEnricher.cs and ObsidianEmitter.cs, causing 7 build errors
++- **Fix:** Added ParseXmlResponse method in LlmEnricher to parse XML into EnrichmentResponse; updated ObsidianEmitter render method signatures from `string? summary` to `EnrichmentResponse? enrichment`; committed 05.1-01's remaining uncommitted files (ChatClientFactory, CodexChatClient, PromptBuilder)
++- **Files modified:** Enrichment/LlmEnricher.cs, Emission/ObsidianEmitter.cs, Enrichment/Config/ChatClientFactory.cs, Enrichment/Config/CodexChatClient.cs
++- **Verification:** Clean build (0 errors, 0 warnings)
++- **Committed in:** d60b115 (Task 1 commit)
++
++**2. [Rule 1 - Bug] Removed duplicate BOM marker and using directive in LlmEnricher.cs**
++- **Found during:** Task 2 (build verification)
++- **Issue:** LlmEnricher.cs had an internal UTF-8 BOM marker causing duplicate `using System.Text.RegularExpressions` warning
++- **Fix:** Removed internal BOM and deduplicated using directives
++- **Files modified:** Enrichment/LlmEnricher.cs
++- **Verification:** Clean build (0 warnings)
++- **Committed in:** a06dc1a (Task 2 commit)
++
++---
++
++**Total deviations:** 2 auto-fixed (1 blocking, 1 bug)
++**Impact on plan:** Both fixes necessary for clean build. The 05.1-01 migration fix was prerequisite for any work in this plan.
++
++## Issues Encountered
++None beyond the deviations documented above.
++
++## User Setup Required
++None - no external service configuration required.
++
++## Next Phase Readiness
++- Progress display is jitter-free and ready for all pipeline modes
++- EnrichmentResponse type fully wired through LlmEnricher -> SummaryCache -> ObsidianEmitter
++- Plan 05.1-01 structured XML output changes are now complete end-to-end
++
++## Self-Check: PASSED
++
++- All 5 modified files exist on disk
++- Both task commits verified (d60b115, a06dc1a)
++- Build clean: 0 errors, 0 warnings
++- CreateProgress: 0 references (deleted)
++- AnsiConsole.Progress: 0 references (replaced with Live)
++- ProgressContext: 0 references (replaced with IProgress)
++
++---
++*Phase: 05.1-structured-xml-output-progress-fix*
++*Completed: 2026-02-26*
+diff --git a/Emission/ObsidianEmitter.cs b/Emission/ObsidianEmitter.cs
+index 6134bac..20c7774 100644
+--- a/Emission/ObsidianEmitter.cs
++++ b/Emission/ObsidianEmitter.cs
+@@ -1,4 +1,4 @@
+-using System.Text;
++﻿using System.Text;
+ using Code2Obsidian.Analysis;
+ using Code2Obsidian.Analysis.Models;
+ using Code2Obsidian.Enrichment;
+@@ -80,8 +80,8 @@ public sealed class ObsidianEmitter : IEmitter
+             try
+             {
+                 // Look up LLM-generated summary (null if no enrichment or not found)
+-                result.MethodSummaries.TryGetValue(methodId.Value, out var methodSummary);
+-                var content = RenderMethodNote(method, analysis, collisionSet, overloadIndex, methodSummary);
++                result.MethodSummaries.TryGetValue(methodId.Value, out var methodEnrichment);
++                var content = RenderMethodNote(method, analysis, collisionSet, overloadIndex, methodEnrichment);
+                 await File.WriteAllTextAsync(filePath, content, ct);
+                 notesWritten++;
+                 emittedNotes.Add((filePath, method.FilePath, methodId.Value));
+@@ -111,10 +111,10 @@ public sealed class ObsidianEmitter : IEmitter
+             try
+             {
+                 // Look up LLM-generated summary (null if no enrichment or not found)
+-                result.TypeSummaries.TryGetValue(typeId.Value, out var typeSummary);
++                result.TypeSummaries.TryGetValue(typeId.Value, out var typeEnrichment);
+                 var content = typeInfo.Kind == TypeKindInfo.Interface
+-                    ? RenderInterfaceNote(typeInfo, analysis, collisionSet, overloadIndex, typeSummary)
+-                    : RenderClassNote(typeInfo, analysis, collisionSet, overloadIndex, typeSummary);
++                    ? RenderInterfaceNote(typeInfo, analysis, collisionSet, overloadIndex, typeEnrichment)
++                    : RenderClassNote(typeInfo, analysis, collisionSet, overloadIndex, typeEnrichment);
+                 await File.WriteAllTextAsync(filePath, content, ct);
+                 notesWritten++;
+                 emittedNotes.Add((filePath, typeInfo.FilePath, typeId.Value));
+@@ -267,7 +267,7 @@ public sealed class ObsidianEmitter : IEmitter
+     /// Renders a complete markdown note for a single method with expanded YAML frontmatter,
+     /// danger callouts for high-risk methods, header, signature, doc comment, and call graph links.
+     /// </summary>
+-    private string RenderMethodNote(MethodInfo method, AnalysisResult analysis, HashSet<string> collisionSet, Dictionary<MethodId, string?> overloadIndex, string? summary = null)
++    private string RenderMethodNote(MethodInfo method, AnalysisResult analysis, HashSet<string> collisionSet, Dictionary<MethodId, string?> overloadIndex, EnrichmentResponse? enrichment = null)
+     {
+         var sb = new StringBuilder();
+         var callGraph = analysis.CallGraph;
+@@ -315,10 +315,15 @@ public sealed class ObsidianEmitter : IEmitter
+         }
+ 
+         // LLM-generated summary (only when enrichment provides one)
+-        if (!string.IsNullOrWhiteSpace(summary))
++        if (enrichment is not null)
+         {
+             sb.AppendLine("## Summary");
+-            sb.AppendLine(summary);
++            sb.AppendLine(enrichment.Summary);
++            if (!string.IsNullOrWhiteSpace(enrichment.Purpose))
++            {
++                sb.AppendLine();
++                sb.AppendLine($"**Purpose**: {enrichment.Purpose}");
++            }
+             sb.AppendLine();
+         }
+ 
+@@ -443,7 +448,7 @@ public sealed class ObsidianEmitter : IEmitter
+     /// Includes expanded YAML frontmatter with pattern detection, purpose summary,
+     /// inheritance wikilinks, DI dependencies, properties/fields, and member index.
+     /// </summary>
+-    private static string RenderClassNote(TypeInfo typeInfo, AnalysisResult analysis, HashSet<string> collisionSet, Dictionary<MethodId, string?> overloadIndex, string? summary = null)
++    private static string RenderClassNote(TypeInfo typeInfo, AnalysisResult analysis, HashSet<string> collisionSet, Dictionary<MethodId, string?> overloadIndex, EnrichmentResponse? enrichment = null)
+     {
+         var sb = new StringBuilder();
+ 
+@@ -513,10 +518,15 @@ public sealed class ObsidianEmitter : IEmitter
+         sb.AppendLine();
+ 
+         // LLM-generated summary (only when enrichment provides one)
+-        if (!string.IsNullOrWhiteSpace(summary))
++        if (enrichment is not null)
+         {
+             sb.AppendLine("## Summary");
+-            sb.AppendLine(summary);
++            sb.AppendLine(enrichment.Summary);
++            if (!string.IsNullOrWhiteSpace(enrichment.Purpose))
++            {
++                sb.AppendLine();
++                sb.AppendLine($"**Purpose**: {enrichment.Purpose}");
++            }
+             sb.AppendLine();
+         }
+ 
+@@ -611,7 +621,7 @@ public sealed class ObsidianEmitter : IEmitter
+     /// Same structure as class notes, but includes "Known Implementors" section
+     /// and sets dependency_count to 0 (interfaces have no constructors with DI).
+     /// </summary>
+-    private static string RenderInterfaceNote(TypeInfo typeInfo, AnalysisResult analysis, HashSet<string> collisionSet, Dictionary<MethodId, string?> overloadIndex, string? summary = null)
++    private static string RenderInterfaceNote(TypeInfo typeInfo, AnalysisResult analysis, HashSet<string> collisionSet, Dictionary<MethodId, string?> overloadIndex, EnrichmentResponse? enrichment = null)
+     {
+         var sb = new StringBuilder();
+ 
+@@ -672,10 +682,15 @@ public sealed class ObsidianEmitter : IEmitter
+         sb.AppendLine();
+ 
+         // LLM-generated summary (only when enrichment provides one)
+-        if (!string.IsNullOrWhiteSpace(summary))
++        if (enrichment is not null)
+         {
+             sb.AppendLine("## Summary");
+-            sb.AppendLine(summary);
++            sb.AppendLine(enrichment.Summary);
++            if (!string.IsNullOrWhiteSpace(enrichment.Purpose))
++            {
++                sb.AppendLine();
++                sb.AppendLine($"**Purpose**: {enrichment.Purpose}");
++            }
+             sb.AppendLine();
+         }
+ 
+diff --git a/Enrichment/Config/ChatClientFactory.cs b/Enrichment/Config/ChatClientFactory.cs
+index 8a9009f..8fa71d0 100644
+--- a/Enrichment/Config/ChatClientFactory.cs
++++ b/Enrichment/Config/ChatClientFactory.cs
+@@ -19,7 +19,8 @@ public static class ChatClientFactory
+     {
+         ["anthropic"] = CreateAnthropicClient,
+         ["openai"] = CreateOpenAIClient,
+-        ["ollama"] = CreateOllamaClient
++        ["ollama"] = CreateOllamaClient,
++        ["codex"] = CreateCodexClient
+     };
+ 
+     /// <summary>
+@@ -87,4 +88,16 @@ public static class ChatClientFactory
+         var client = new OpenAIClient(credential, options);
+         return client.GetChatClient(config.Model).AsIChatClient();
+     }
++
++    private static IChatClient CreateCodexClient(LlmConfig config, string _)
++    {
++        var endpoint = config.Endpoint ?? "ws://localhost:8080";
++        if (!endpoint.StartsWith("ws://", StringComparison.OrdinalIgnoreCase) &&
++            !endpoint.StartsWith("wss://", StringComparison.OrdinalIgnoreCase))
++        {
++            throw new InvalidOperationException(
++                $"Codex endpoint must use ws:// or wss:// scheme, got: '{endpoint}'");
++        }
++        return new CodexChatClient(new Uri(endpoint), config.Model);
++    }
+ }
+diff --git a/Enrichment/Config/CodexChatClient.cs b/Enrichment/Config/CodexChatClient.cs
+new file mode 100644
+index 0000000..bcf2478
+--- /dev/null
++++ b/Enrichment/Config/CodexChatClient.cs
+@@ -0,0 +1,322 @@
++using System.Net.WebSockets;
++using System.Text;
++using System.Text.Json;
++using System.Text.Json.Nodes;
++using Microsoft.Extensions.AI;
++
++namespace Code2Obsidian.Enrichment.Config;
++
++/// <summary>
++/// IChatClient implementation that speaks the Codex JSON-RPC-over-WebSocket protocol.
++/// Lazily connects on first call, maintains a single thread for all turns, and
++/// auto-declines approval requests (we only want text responses).
++/// </summary>
++public sealed class CodexChatClient : IChatClient, IDisposable
++{
++    private readonly Uri _endpoint;
++    private readonly string _model;
++    private readonly SemaphoreSlim _turnLock = new(1, 1);
++
++    private ClientWebSocket? _ws;
++    private string? _threadId;
++    private int _nextId = 1;
++    private bool _disposed;
++    private bool _handshakeFailed;
++
++    public CodexChatClient(Uri endpoint, string model)
++    {
++        _endpoint = endpoint;
++        _model = model;
++    }
++
++    public ChatClientMetadata Metadata => new("codex", _endpoint, _model);
++
++    public async Task<ChatResponse> GetResponseAsync(
++        IEnumerable<ChatMessage> chatMessages,
++        ChatOptions? options = null,
++        CancellationToken cancellationToken = default)
++    {
++        await _turnLock.WaitAsync(cancellationToken);
++        try
++        {
++            await EnsureConnectedAsync(cancellationToken);
++
++            // Build input as array of content objects per Codex protocol
++            var inputArray = BuildInputArray(chatMessages);
++
++            // Send turn/start (model is set at thread level, not per-turn)
++            var turnId = NextId();
++            await SendAsync(new JsonObject
++            {
++                ["id"] = turnId,
++                ["method"] = "turn/start",
++                ["params"] = new JsonObject
++                {
++                    ["threadId"] = _threadId,
++                    ["input"] = inputArray
++                }
++            }, cancellationToken);
++
++            // Collect response
++            var textBuilder = new StringBuilder();
++            long? inputTokens = null;
++            long? outputTokens = null;
++            var turnCompleted = false;
++
++            while (!turnCompleted)
++            {
++                var msg = await ReceiveAsync(cancellationToken);
++                if (msg is null)
++                    throw new InvalidOperationException("WebSocket closed before turn/completed.");
++
++                // Handle JSON-RPC error responses (e.g. invalid model/thread)
++                if (msg["id"] is JsonNode responseId &&
++                    responseId.GetValue<int>() == turnId &&
++                    msg["error"] is JsonNode errorNode)
++                {
++                    var code = errorNode["code"]?.GetValue<int>() ?? -1;
++                    var message = errorNode["message"]?.GetValue<string>() ?? "Unknown error";
++                    throw new InvalidOperationException(
++                        $"Codex turn/start failed (code {code}): {message}");
++                }
++
++                var method = msg["method"]?.GetValue<string>();
++
++                switch (method)
++                {
++                    case "item/agentMessage/delta":
++                        var delta = msg["params"]?["delta"]?.GetValue<string>();
++                        if (delta is not null)
++                            textBuilder.Append(delta);
++                        break;
++
++                    case "thread/tokenUsage/updated":
++                        var usage = msg["params"];
++                        inputTokens = usage?["inputTokens"]?.GetValue<long>();
++                        outputTokens = usage?["outputTokens"]?.GetValue<long>();
++                        break;
++
++                    case "item/commandExecution/requestApproval":
++                    case "item/fileChange/requestApproval":
++                        // Auto-decline - we only want text
++                        var approvalId = msg["id"];
++                        if (approvalId is not null)
++                        {
++                            await SendAsync(new JsonObject
++                            {
++                                ["id"] = approvalId.DeepClone(),
++                                ["result"] = new JsonObject
++                                {
++                                    ["approved"] = false,
++                                    ["reason"] = "Code2Obsidian enrichment - text only"
++                                }
++                            }, cancellationToken);
++                        }
++                        break;
++
++                    case "turn/completed":
++                        turnCompleted = true;
++                        break;
++
++                    default:
++                        // Ignore unknown notifications (item/agentMessage/start, etc.)
++                        break;
++                }
++            }
++
++            var response = new ChatResponse(new ChatMessage(ChatRole.Assistant, textBuilder.ToString()));
++
++            if (inputTokens.HasValue || outputTokens.HasValue)
++            {
++                response.Usage = new UsageDetails
++                {
++                    InputTokenCount = inputTokens,
++                    OutputTokenCount = outputTokens
++                };
++            }
++
++            return response;
++        }
++        finally
++        {
++            _turnLock.Release();
++        }
++    }
++
++    public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
++        IEnumerable<ChatMessage> chatMessages,
++        ChatOptions? options = null,
++        CancellationToken cancellationToken = default)
++    {
++        throw new NotSupportedException("Streaming not supported by CodexChatClient. Use GetResponseAsync.");
++    }
++
++    public object? GetService(Type serviceType, object? serviceKey = null)
++    {
++        if (serviceType == typeof(CodexChatClient))
++            return this;
++        return null;
++    }
++
++    public void Dispose()
++    {
++        if (_disposed) return;
++        _disposed = true;
++        _ws?.Dispose();
++        _turnLock.Dispose();
++    }
++
++    // ---- Private protocol helpers ----
++
++    private async Task EnsureConnectedAsync(CancellationToken ct)
++    {
++        if (_ws is { State: WebSocketState.Open } && _threadId is not null)
++            return;
++
++        // Circuit breaker: if handshake already failed, don't retry every entity
++        if (_handshakeFailed)
++            throw new InvalidOperationException("Codex handshake previously failed. Restart to retry.");
++
++        // Close any previous connection that failed mid-handshake
++        _ws?.Dispose();
++        _threadId = null;
++        _ws = new ClientWebSocket();
++        await _ws.ConnectAsync(_endpoint, ct);
++
++        try
++        {
++            // 1. Send initialize with clientInfo object
++            var initId = NextId();
++            await SendAsync(new JsonObject
++            {
++                ["id"] = initId,
++                ["method"] = "initialize",
++                ["params"] = new JsonObject
++                {
++                    ["clientInfo"] = new JsonObject
++                    {
++                        ["name"] = "code2obsidian",
++                        ["title"] = "Code2Obsidian",
++                        ["version"] = "1.0"
++                    }
++                }
++            }, ct);
++
++            await WaitForResponseAsync(initId, ct);
++
++            // 2. Send initialized notification (no id)
++            await SendAsync(new JsonObject
++            {
++                ["method"] = "initialized"
++            }, ct);
++
++            // 3. Start a thread with model and approval policy
++            var threadStartId = NextId();
++            await SendAsync(new JsonObject
++            {
++                ["id"] = threadStartId,
++                ["method"] = "thread/start",
++                ["params"] = new JsonObject
++                {
++                    ["model"] = _model,
++                    ["approvalPolicy"] = "never"
++                }
++            }, ct);
++
++            var threadResponse = await WaitForResponseAsync(threadStartId, ct);
++
++            // Thread ID is at result.thread.id per Codex protocol
++            _threadId = threadResponse?["result"]?["thread"]?["id"]?.GetValue<string>()
++                        ?? throw new InvalidOperationException(
++                            "Codex did not return a thread id in result.thread.id.");
++        }
++        catch
++        {
++            _ws?.Dispose();
++            _ws = null;
++            _threadId = null;
++            _handshakeFailed = true;
++            throw;
++        }
++    }
++
++    private async Task<JsonObject?> WaitForResponseAsync(int expectedId, CancellationToken ct)
++    {
++        while (true)
++        {
++            var msg = await ReceiveAsync(ct);
++            if (msg is null)
++                throw new InvalidOperationException("WebSocket closed while waiting for response.");
++
++            // Match by id
++            if (msg["id"] is JsonNode idNode && idNode.GetValue<int>() == expectedId)
++            {
++                // Surface JSON-RPC error payloads
++                if (msg["error"] is JsonNode errorNode)
++                {
++                    var code = errorNode["code"]?.GetValue<int>() ?? -1;
++                    var message = errorNode["message"]?.GetValue<string>() ?? "Unknown error";
++                    throw new InvalidOperationException(
++                        $"Codex RPC error (code {code}): {message}");
++                }
++                return msg;
++            }
++
++            // Discard notifications during handshake
++        }
++    }
++
++    private int NextId() => Interlocked.Increment(ref _nextId);
++
++    private async Task SendAsync(JsonObject message, CancellationToken ct)
++    {
++        var json = message.ToJsonString(new JsonSerializerOptions { WriteIndented = false });
++        var bytes = Encoding.UTF8.GetBytes(json);
++        await _ws!.SendAsync(bytes, WebSocketMessageType.Text, endOfMessage: true, ct);
++    }
++
++    private async Task<JsonObject?> ReceiveAsync(CancellationToken ct)
++    {
++        var buffer = new ArraySegment<byte>(new byte[8192]);
++        using var ms = new MemoryStream();
++
++        WebSocketReceiveResult result;
++        do
++        {
++            result = await _ws!.ReceiveAsync(buffer, ct);
++            if (result.MessageType == WebSocketMessageType.Close)
++                return null;
++            ms.Write(buffer.Array!, buffer.Offset, result.Count);
++        }
++        while (!result.EndOfMessage);
++
++        ms.Position = 0;
++        return JsonSerializer.Deserialize<JsonObject>(ms);
++    }
++
++    private static JsonArray BuildInputArray(IEnumerable<ChatMessage> messages)
++    {
++        // Codex turn/start expects input as an array of content objects:
++        // [{ "type": "text", "text": "..." }]
++        // Flatten system + user messages into a single text block
++        var sb = new StringBuilder();
++        foreach (var msg in messages)
++        {
++            var role = msg.Role == ChatRole.System ? "System"
++                     : msg.Role == ChatRole.User ? "User"
++                     : "Assistant";
++            sb.AppendLine($"[{role}]");
++            sb.AppendLine(msg.Text);
++            sb.AppendLine();
++        }
++
++        return new JsonArray
++        {
++            new JsonObject
++            {
++                ["type"] = "text",
++                ["text"] = sb.ToString().TrimEnd()
++            }
++        };
++    }
++}
+diff --git a/Enrichment/EnrichedResult.cs b/Enrichment/EnrichedResult.cs
+index 506f04d..760859b 100644
+--- a/Enrichment/EnrichedResult.cs
++++ b/Enrichment/EnrichedResult.cs
+@@ -3,6 +3,13 @@ using Code2Obsidian.Analysis;
+ using System.Collections.Concurrent;
+ namespace Code2Obsidian.Enrichment;
+ 
++/// <summary>
++/// Structured LLM response parsed from XML output.
++/// Summary is the detailed technical description, Purpose is a one-liner,
++/// Tags are comma-separated architectural/behavioral labels.
++/// </summary>
++public sealed record EnrichmentResponse(string Summary, string Purpose, string[] Tags);
++
+ /// <summary>
+ /// Wraps AnalysisResult with optional enrichment data.
+ /// In Phase 1 this is a passthrough -- future phases add LLM summaries, complexity scores, etc.
+@@ -15,18 +22,18 @@ public sealed class EnrichedResult
+     public AnalysisResult Analysis { get; }
+ 
+     /// <summary>
+-    /// LLM-generated summaries for methods, keyed by MethodId.Value.
++    /// LLM-generated enrichment responses for methods, keyed by MethodId.Value.
+     /// Empty when --enrich is not used; emitter renders no Summary section in that case.
+     /// Uses ConcurrentDictionary for thread-safe writes from parallel enrichment tasks.
+     /// </summary>
+-    public ConcurrentDictionary<string, string> MethodSummaries { get; } = new();
++    public ConcurrentDictionary<string, EnrichmentResponse> MethodSummaries { get; } = new();
+ 
+     /// <summary>
+-    /// LLM-generated summaries for types, keyed by TypeId.Value.
++    /// LLM-generated enrichment responses for types, keyed by TypeId.Value.
+     /// Empty when --enrich is not used; emitter renders no Summary section in that case.
+     /// Uses ConcurrentDictionary for thread-safe writes from parallel enrichment tasks.
+     /// </summary>
+-    public ConcurrentDictionary<string, string> TypeSummaries { get; } = new();
++    public ConcurrentDictionary<string, EnrichmentResponse> TypeSummaries { get; } = new();
+ 
+     public EnrichedResult(AnalysisResult analysis)
+     {
+diff --git a/Enrichment/LlmEnricher.cs b/Enrichment/LlmEnricher.cs
+index 37e8734..1288ae4 100644
+--- a/Enrichment/LlmEnricher.cs
++++ b/Enrichment/LlmEnricher.cs
+@@ -1,3 +1,6 @@
++﻿using System.Net;
++using System.Text.RegularExpressions;
++using System.Xml.Linq;
+ using Code2Obsidian.Analysis;
+ using Code2Obsidian.Analysis.Models;
+ using Code2Obsidian.Enrichment.Config;
+@@ -205,8 +208,9 @@ public sealed class LlmEnricher : IEnricher
+             if (response.Usage?.OutputTokenCount is long outputTokens)
+                 Interlocked.Add(ref _outputTokensUsed, (int)outputTokens);
+ 
+-            _cache.Put(method.Id.Value, hash, summary, _config.Model);
+-            enriched.MethodSummaries[method.Id.Value] = summary;
++            var enrichmentResponse = ParseXmlResponse(summary);
++            _cache.Put(method.Id.Value, hash, enrichmentResponse, _config.Model);
++            enriched.MethodSummaries[method.Id.Value] = enrichmentResponse;
+             Interlocked.Increment(ref _entitiesEnriched);
+ 
+             var completed = EntitiesCached + EntitiesEnriched + EntitiesFailed;
+@@ -261,8 +265,9 @@ public sealed class LlmEnricher : IEnricher
+             if (response.Usage?.OutputTokenCount is long outputTokens)
+                 Interlocked.Add(ref _outputTokensUsed, (int)outputTokens);
+ 
+-            _cache.Put(type.Id.Value, hash, summary, _config.Model);
+-            enriched.TypeSummaries[type.Id.Value] = summary;
++            var enrichmentResponse = ParseXmlResponse(summary);
++            _cache.Put(type.Id.Value, hash, enrichmentResponse, _config.Model);
++            enriched.TypeSummaries[type.Id.Value] = enrichmentResponse;
+             Interlocked.Increment(ref _entitiesEnriched);
+ 
+             var completed = EntitiesCached + EntitiesEnriched + EntitiesFailed;
+@@ -283,6 +288,26 @@ public sealed class LlmEnricher : IEnricher
+         }
+     }
+ 
++    /// <summary>
++    /// Parses structured XML response from the LLM into an EnrichmentResponse.
++    /// Extracts summary, purpose, and tags from XML tags. Falls back gracefully
++    /// if tags are missing: summary defaults to full text, purpose to empty, tags to empty array.
++    /// </summary>
++    private static EnrichmentResponse ParseXmlResponse(string text)
++    {
++        var summaryMatch = Regex.Match(text, @"<summary>(.*?)</summary>", RegexOptions.Singleline);
++        var purposeMatch = Regex.Match(text, @"<purpose>(.*?)</purpose>", RegexOptions.Singleline);
++        var tagsMatch = Regex.Match(text, @"<tags>(.*?)</tags>", RegexOptions.Singleline);
++
++        var summary = summaryMatch.Success ? summaryMatch.Groups[1].Value.Trim() : text.Trim();
++        var purpose = purposeMatch.Success ? purposeMatch.Groups[1].Value.Trim() : "";
++        var tags = tagsMatch.Success
++            ? tagsMatch.Groups[1].Value.Split(',').Select(t => t.Trim()).Where(t => t.Length > 0).ToArray()
++            : Array.Empty<string>();
++
++        return new EnrichmentResponse(summary, purpose, tags);
++    }
++
+     private void ReportProgress(string description, int current, int total)
+     {
+         _progress?.Report(new PipelineProgress(PipelineStage.Enriching, description, current, total));
+diff --git a/Enrichment/Prompts/PromptBuilder.cs b/Enrichment/Prompts/PromptBuilder.cs
+index 5e85232..8376fac 100644
+--- a/Enrichment/Prompts/PromptBuilder.cs
++++ b/Enrichment/Prompts/PromptBuilder.cs
+@@ -10,13 +10,14 @@ namespace Code2Obsidian.Enrichment.Prompts;
+ public static class PromptBuilder
+ {
+     /// <summary>
+-    /// System prompt instructing the LLM to write concise, technical summaries.
++    /// System prompt instructing the LLM to respond in structured XML format.
+     /// </summary>
+     public static string SystemPrompt { get; } =
+-        "You are a code documentation assistant. Write concise, technical summaries for experienced developers. " +
+-        "Assume domain knowledge. Reference implementation details. Do not explain basic programming concepts. " +
+-        "For simple methods, write a single sentence. For complex methods, write a short paragraph (2-4 sentences). " +
+-        "For classes, describe the class's role and primary responsibility, not its member list.";
++        "Analyze the code entity, then respond ONLY with these XML tags:\n" +
++        "<summary>1-4 sentence technical summary for experienced developers. Reference implementation details.</summary>\n" +
++        "<purpose>Single sentence describing what this code does.</purpose>\n" +
++        "<tags>comma-separated: entry-point, data-access, async, utility, factory, DI, validation, error-handling</tags>\n" +
++        "No preamble or text outside these tags.";
+ 
+     /// <summary>
+     /// Builds a user prompt for summarizing a C# method.
+diff --git a/Enrichment/SummaryCache.cs b/Enrichment/SummaryCache.cs
+index 3a6cbdf..7c9e7e7 100644
+--- a/Enrichment/SummaryCache.cs
++++ b/Enrichment/SummaryCache.cs
+@@ -4,7 +4,7 @@ using Microsoft.Data.Sqlite;
+ namespace Code2Obsidian.Enrichment;
+ 
+ /// <summary>
+-/// Reads and writes LLM-generated summaries in the SQLite summaries table.
++/// Reads and writes LLM-generated structured enrichment data in the SQLite summaries table.
+ /// Follows IncrementalState's open-per-operation pattern (NOT IDisposable).
+ /// Cache entries are keyed by entity_id + content_hash; a stale hash means cache miss.
+ /// </summary>
+@@ -18,21 +18,33 @@ public sealed class SummaryCache
+     }
+ 
+     /// <summary>
+-    /// Attempts to retrieve a cached summary for the given entity and content hash.
++    /// Attempts to retrieve a cached enrichment response for the given entity and content hash.
+     /// Returns null on cache miss (no entry or stale hash) or on database error (graceful corruption).
++    /// Tags are stored as comma-separated string; on read, split by comma and trim each element.
+     /// </summary>
+-    public string? TryGet(string entityId, string currentContentHash)
++    public EnrichmentResponse? TryGet(string entityId, string currentContentHash)
+     {
+         try
+         {
+             using var connection = OpenConnection();
+ 
+             using var cmd = connection.CreateCommand();
+-            cmd.CommandText = "SELECT summary_text FROM summaries WHERE entity_id = @id AND content_hash = @hash";
++            cmd.CommandText = "SELECT summary, purpose, tags FROM summaries WHERE entity_id = @id AND content_hash = @hash";
+             cmd.Parameters.AddWithValue("@id", entityId);
+             cmd.Parameters.AddWithValue("@hash", currentContentHash);
+ 
+-            return cmd.ExecuteScalar() as string;
++            using var reader = cmd.ExecuteReader();
++            if (!reader.Read())
++                return null;
++
++            var summary = reader.GetString(0);
++            var purpose = reader.GetString(1);
++            var tagsRaw = reader.GetString(2);
++            var tags = string.IsNullOrWhiteSpace(tagsRaw)
++                ? Array.Empty<string>()
++                : tagsRaw.Split(',').Select(t => t.Trim()).Where(t => t.Length > 0).ToArray();
++
++            return new EnrichmentResponse(summary, purpose, tags);
+         }
+         catch (SqliteException)
+         {
+@@ -42,21 +54,24 @@ public sealed class SummaryCache
+     }
+ 
+     /// <summary>
+-    /// Stores or updates a summary for the given entity with its content hash and model ID.
++    /// Stores or updates an enrichment response for the given entity with its content hash and model ID.
+     /// Uses INSERT OR REPLACE to handle both new entries and hash changes.
++    /// Tags are stored as a comma-separated string.
+     /// </summary>
+-    public void Put(string entityId, string contentHash, string summaryText, string modelId)
++    public void Put(string entityId, string contentHash, EnrichmentResponse response, string modelId)
+     {
+         using var connection = OpenConnection();
+ 
+         using var cmd = connection.CreateCommand();
+         cmd.CommandText = """
+-            INSERT OR REPLACE INTO summaries (entity_id, content_hash, summary_text, model_id, created_at)
+-            VALUES (@id, @hash, @text, @model, @time)
++            INSERT OR REPLACE INTO summaries (entity_id, content_hash, summary, purpose, tags, model_id, created_at)
++            VALUES (@id, @hash, @summary, @purpose, @tags, @model, @time)
+             """;
+         cmd.Parameters.AddWithValue("@id", entityId);
+         cmd.Parameters.AddWithValue("@hash", contentHash);
+-        cmd.Parameters.AddWithValue("@text", summaryText);
++        cmd.Parameters.AddWithValue("@summary", response.Summary);
++        cmd.Parameters.AddWithValue("@purpose", response.Purpose);
++        cmd.Parameters.AddWithValue("@tags", string.Join(", ", response.Tags));
+         cmd.Parameters.AddWithValue("@model", modelId);
+         cmd.Parameters.AddWithValue("@time", DateTime.UtcNow.ToString("o"));
+ 
+diff --git a/Incremental/StateSchema.cs b/Incremental/StateSchema.cs
+index a6b3fb2..3dce2f1 100644
+--- a/Incremental/StateSchema.cs
++++ b/Incremental/StateSchema.cs
+@@ -41,7 +41,7 @@ public static class StateSchema
+     }
+ 
+     /// <summary>
+-    /// Adds the summaries table for LLM enrichment caching.
++    /// Adds the summaries table for LLM enrichment caching with structured columns.
+     /// Existing V1 tables are untouched; IF NOT EXISTS ensures idempotency.
+     /// </summary>
+     private static void MigrateToV2(SqliteConnection connection)
+@@ -53,7 +53,9 @@ public static class StateSchema
+             CREATE TABLE IF NOT EXISTS summaries (
+                 entity_id TEXT PRIMARY KEY,
+                 content_hash TEXT NOT NULL,
+-                summary_text TEXT NOT NULL,
++                summary TEXT NOT NULL,
++                purpose TEXT NOT NULL,
++                tags TEXT NOT NULL,
+                 model_id TEXT NOT NULL,
+                 created_at TEXT NOT NULL
+             );
+diff --git a/Program.cs b/Program.cs
+index 2ffd75a..f80d548 100644
+--- a/Program.cs
++++ b/Program.cs
+@@ -1,5 +1,6 @@
+-using System.CommandLine;
++﻿using System.CommandLine;
+ using System.CommandLine.Parsing;
++using System.Diagnostics;
+ using Code2Obsidian.Analysis;
+ using Code2Obsidian.Analysis.Analyzers;
+ using Code2Obsidian.Emission;
+@@ -10,6 +11,7 @@ using Code2Obsidian.Loading;
+ using Code2Obsidian.Pipeline;
+ using Microsoft.Extensions.AI;
+ using Spectre.Console;
++using Spectre.Console.Rendering;
+ 
+ namespace Code2Obsidian;
+ 
+@@ -215,16 +217,9 @@ internal static class Program
+                 var stateDbPath = Path.Combine(outputDir, ".code2obsidian-state.db");
+                 var cache = new SummaryCache(stateDbPath);
+ 
+-                // Create confirmation lambda for cost estimation
+-                Func<int, int, int, decimal, bool> confirmEnrichment = (count, inTokens, outTokens, cost) =>
+-                {
+-                    AnsiConsole.MarkupLine($"[yellow]Enrichment will process {count} entities[/]");
+-                    AnsiConsole.MarkupLine($"[yellow]Estimated: ~{inTokens + outTokens:N0} tokens (~${cost:F4})[/]");
+-                    return AnsiConsole.Confirm("Proceed with LLM enrichment?", defaultValue: true);
+-                };
+-
+                 // Create LlmEnricher (progress wired per execution case)
+-                llmEnricher = new LlmEnricher(client, cache, config, progress: null, confirmEnrichment: confirmEnrichment);
++                // No confirmation prompt: --enrich flag is explicit user consent
++                llmEnricher = new LlmEnricher(client, cache, config, progress: null, confirmEnrichment: null);
+                 enrichers.Add(llmEnricher);
+ 
+                 AnsiConsole.MarkupLine($"[green]LLM enrichment enabled:[/] {config.Provider}/{config.Model}");
+@@ -245,15 +240,14 @@ internal static class Program
+                     state.DeleteState();
+                     AnsiConsole.MarkupLine("[yellow]State wiped. Performing full analysis.[/]");
+                     LlmEnricher? liveLlm = null;
+-                    result = await RunWithProgress(ctx =>
++                    result = await RunWithProgress(async progress =>
+                     {
+-                        var progress = CreateProgress(ctx);
+                         var (incEnrichers, llm) = BuildEnrichersWithProgress(enrichers, progress);
+                         liveLlm = llm;
+                         var incPipeline = new IncrementalPipeline(
+                             context, progress, outputDir, stateDbPath, fanInThreshold, complexityThreshold,
+                             enrichers: incEnrichers);
+-                        return incPipeline.RunFullWithStateSaveAsync(ct);
++                        return await incPipeline.RunFullWithStateSaveAsync(ct);
+                     });
+                     CopyEnrichmentMetrics(result, liveLlm);
+                     result.WasIncremental = false;
+@@ -273,12 +267,11 @@ internal static class Program
+                         return 1;
+                     }
+ 
+-                    result = await RunWithProgress(ctx =>
++                    result = await RunWithProgress(async progress =>
+                     {
+-                        var progress = CreateProgress(ctx);
+                         var incPipeline = new IncrementalPipeline(
+                             context, progress, outputDir, stateDbPath, fanInThreshold, complexityThreshold);
+-                        return incPipeline.RunDryRunAsync(state, ct);
++                        return await incPipeline.RunDryRunAsync(state, ct);
+                     });
+                     result.WasIncremental = true;
+                 }
+@@ -290,15 +283,14 @@ internal static class Program
+                         // Case B: no prior state -> full analysis with state save (INFR-05)
+                         AnsiConsole.MarkupLine("[yellow]No prior state found. Performing full analysis and saving state.[/]");
+                         LlmEnricher? liveLlmB = null;
+-                        result = await RunWithProgress(ctx =>
++                        result = await RunWithProgress(async progress =>
+                         {
+-                            var progress = CreateProgress(ctx);
+                             var (incEnrichers, llm) = BuildEnrichersWithProgress(enrichers, progress);
+                             liveLlmB = llm;
+                             var incPipeline = new IncrementalPipeline(
+                                 context, progress, outputDir, stateDbPath, fanInThreshold, complexityThreshold,
+                                 enrichers: incEnrichers);
+-                            return incPipeline.RunFullWithStateSaveAsync(ct);
++                            return await incPipeline.RunFullWithStateSaveAsync(ct);
+                         });
+                         CopyEnrichmentMetrics(result, liveLlmB);
+                         result.WasIncremental = true;
+@@ -307,15 +299,14 @@ internal static class Program
+                     {
+                         // Case C: prior state exists -> run incremental two-pass flow (INFR-03)
+                         LlmEnricher? liveLlmC = null;
+-                        result = await RunWithProgress(ctx =>
++                        result = await RunWithProgress(async progress =>
+                         {
+-                            var progress = CreateProgress(ctx);
+                             var (incEnrichers, llm) = BuildEnrichersWithProgress(enrichers, progress);
+                             liveLlmC = llm;
+                             var incPipeline = new IncrementalPipeline(
+                                 context, progress, outputDir, stateDbPath, fanInThreshold, complexityThreshold,
+                                 enrichers: incEnrichers);
+-                            return incPipeline.RunIncrementalAsync(state, ct);
++                            return await incPipeline.RunIncrementalAsync(state, ct);
+                         });
+                         CopyEnrichmentMetrics(result, liveLlmC);
+                         result.WasIncremental = true;
+@@ -418,7 +409,7 @@ internal static class Program
+     }
+ 
+     /// <summary>
+-    /// Runs the full pipeline (non-incremental Case A) with Spectre.Console progress.
++    /// Runs the full pipeline (non-incremental Case A) with Live display.
+     /// </summary>
+     private static async Task<PipelineResult> RunFullPipeline(
+         AnalysisContext context, string outputDir, int fanInThreshold, int complexityThreshold,
+@@ -427,112 +418,126 @@ internal static class Program
+         var analyzers = new List<IAnalyzer> { new MethodAnalyzer(), new TypeAnalyzer() };
+         var emitter = new ObsidianEmitter(fanInThreshold, complexityThreshold);
+ 
+-        PipelineResult result = null!;
+-
+-        await AnsiConsole.Progress()
+-            .Columns(
+-                new TaskDescriptionColumn(),
+-                new ProgressBarColumn(),
+-                new PercentageColumn(),
+-                new SpinnerColumn(),
+-                new ElapsedTimeColumn())
+-            .StartAsync(async ctx =>
+-            {
+-                var progress = CreateProgress(ctx);
+-
+-                // Rebuild enrichers with live progress
+-                var (liveEnrichers, liveLlm) = BuildEnrichersWithProgress(enrichers, progress);
+-
+-                var pipeline = new Pipeline.Pipeline(analyzers, liveEnrichers, emitter);
+-                result = await pipeline.RunAsync(context, outputDir, progress, ct);
+-
+-                // Copy enrichment metrics from the live enricher
+-                if (liveLlm is not null)
+-                {
+-                    result.EntitiesEnriched = liveLlm.EntitiesEnriched;
+-                    result.EntitiesCached = liveLlm.EntitiesCached;
+-                    result.EntitiesFailed = liveLlm.EntitiesFailed;
+-                    result.InputTokensUsed = liveLlm.InputTokensUsed;
+-                    result.OutputTokensUsed = liveLlm.OutputTokensUsed;
+-                }
++        LlmEnricher? liveLlm = null;
++        var result = await RunWithProgress(async progress =>
++        {
++            // Rebuild enrichers with live progress
++            var (liveEnrichers, llm) = BuildEnrichersWithProgress(enrichers, progress);
++            liveLlm = llm;
+ 
+-                // Mark all tasks complete (progress tasks handled by CreateProgress)
+-            });
++            var pipeline = new Pipeline.Pipeline(analyzers, liveEnrichers, emitter);
++            return await pipeline.RunAsync(context, outputDir, progress, ct);
++        });
+ 
++        CopyEnrichmentMetrics(result, liveLlm);
+         return result;
+     }
+ 
+     /// <summary>
+-    /// Runs an async operation within a Spectre.Console progress context.
+-    /// Used for incremental pipeline operations that manage their own progress reporting.
++    /// Runs an async operation within a Live display with fixed-width character bars.
++    /// The IProgress callback uses a lock to serialize concurrent updates from parallel enrichment.
+     /// </summary>
+     private static async Task<PipelineResult> RunWithProgress(
+-        Func<ProgressContext, Task<PipelineResult>> operation)
++        Func<IProgress<PipelineProgress>, Task<PipelineResult>> operation)
+     {
+         PipelineResult result = null!;
++        var renderLock = new object();
+ 
+-        await AnsiConsole.Progress()
+-            .Columns(
+-                new TaskDescriptionColumn(),
+-                new ProgressBarColumn(),
+-                new PercentageColumn(),
+-                new SpinnerColumn(),
+-                new ElapsedTimeColumn())
++        await AnsiConsole.Live(new Text("Starting..."))
++            .AutoClear(false)
+             .StartAsync(async ctx =>
+             {
+-                result = await operation(ctx);
++                var state = new ProgressState();
++                var progress = new Progress<PipelineProgress>(p =>
++                {
++                    lock (renderLock)
++                    {
++                        state.Update(p);
++                        ctx.UpdateTarget(RenderProgressDisplay(state));
++                    }
++                });
++                result = await operation(progress);
+             });
+ 
+         return result;
+     }
+ 
+-    /// <summary>
+-    /// Creates a pipeline progress reporter from a Spectre.Console progress context.
+-    /// </summary>
+-    private static IProgress<PipelineProgress> CreateProgress(ProgressContext ctx)
++    #region Progress Display
++
++    private sealed class StageState
++    {
++        public string Description { get; set; } = "";
++        public int Current { get; set; }
++        public int Total { get; set; }
++        public Stopwatch Timer { get; } = new();
++    }
++
++    private sealed class ProgressState
+     {
+-        var analysisTask = ctx.AddTask("Analyzing...", maxValue: 1);
+-        var enrichmentTask = ctx.AddTask("Enriching...", maxValue: 1);
+-        enrichmentTask.IsIndeterminate = true;
+-        var emissionTask = ctx.AddTask("Emitting...", maxValue: 1);
+-        emissionTask.IsIndeterminate = true;
++        // Stages: 0=Analyzing, 1=Enriching, 2=Emitting
++        public StageState[] Stages { get; } = { new(), new(), new() };
+ 
+-        return new Progress<PipelineProgress>(p =>
++        public void Update(PipelineProgress p)
+         {
+-            switch (p.Stage)
++            var index = p.Stage switch
+             {
+-                case PipelineStage.Analyzing:
+-                    analysisTask.Description = p.Description;
+-                    if (p.Total > 0)
+-                    {
+-                        analysisTask.MaxValue = p.Total;
+-                        analysisTask.Value = p.Current;
+-                    }
+-                    break;
++                PipelineStage.Analyzing => 0,
++                PipelineStage.Enriching => 1,
++                PipelineStage.Emitting => 2,
++                _ => -1
++            };
+ 
+-                case PipelineStage.Enriching:
+-                    enrichmentTask.IsIndeterminate = false;
+-                    enrichmentTask.Description = p.Description;
+-                    if (p.Total > 0)
+-                    {
+-                        enrichmentTask.MaxValue = p.Total;
+-                        enrichmentTask.Value = p.Current;
+-                    }
+-                    break;
++            if (index < 0) return;
+ 
+-                case PipelineStage.Emitting:
+-                    emissionTask.IsIndeterminate = false;
+-                    emissionTask.Description = p.Description;
+-                    if (p.Total > 0)
+-                    {
+-                        emissionTask.MaxValue = p.Total;
+-                        emissionTask.Value = p.Current;
+-                    }
+-                    break;
+-            }
+-        });
++            var stage = Stages[index];
++            stage.Description = p.Description;
++            stage.Current = p.Current;
++            stage.Total = p.Total;
++
++            if (!stage.Timer.IsRunning && p.Total > 0)
++                stage.Timer.Start();
++
++            // Stop timer when stage completes
++            if (p.Current >= p.Total && p.Total > 0)
++                stage.Timer.Stop();
++        }
+     }
+ 
++    private static IRenderable RenderProgressDisplay(ProgressState state)
++    {
++        const int barWidth = 40;
++        var rows = new List<IRenderable>();
++
++        for (var i = 0; i < state.Stages.Length; i++)
++        {
++            var stage = state.Stages[i];
++            if (stage.Total <= 0) continue;
++
++            var pct = stage.Total > 0 ? (double)stage.Current / stage.Total : 0;
++            var filled = (int)(pct * barWidth);
++            var empty = barWidth - filled;
++
++            var filledBar = new string('━', filled);
++            var emptyBar = new string('━', empty);
++            var pctText = $"{pct * 100,4:F0}%";
++            var elapsed = stage.Timer.Elapsed.ToString(@"hh\:mm\:ss");
++
++            // Line 1: Description
++            rows.Add(new Markup($"  {Markup.Escape(stage.Description)}"));
++            // Line 2: Bar + percentage + elapsed
++            rows.Add(new Markup($"  [green]{filledBar}[/][grey]{emptyBar}[/] {pctText}  {elapsed}"));
++            // Blank line between stages
++            rows.Add(new Text(""));
++        }
++
++        if (rows.Count == 0)
++            return new Text("Starting...");
++
++        return new Rows(rows);
++    }
++
++    #endregion
++
+     #region Path Resolution
+ 
+     /// <summary>

@@ -91,13 +91,57 @@ public static class ChatClientFactory
 
     private static IChatClient CreateCodexClient(LlmConfig config, string _)
     {
-        var endpoint = config.Endpoint ?? "ws://localhost:8080";
-        if (!endpoint.StartsWith("ws://", StringComparison.OrdinalIgnoreCase) &&
-            !endpoint.StartsWith("wss://", StringComparison.OrdinalIgnoreCase))
+        var endpointUris = ResolveCodexEndpoints(config)
+            .Select(endpoint => new Uri(endpoint))
+            .ToArray();
+
+        if (endpointUris.Length == 1)
+            return new CodexChatClient(endpointUris[0], config.Model, traceWs: config.TraceCodexWs);
+
+        var pooledClients = endpointUris
+            .Select(uri => (IChatClient)new CodexChatClient(uri, config.Model, traceWs: config.TraceCodexWs))
+            .ToArray();
+        return new RoundRobinChatClient(pooledClients);
+    }
+
+    private static IReadOnlyList<string> ResolveCodexEndpoints(LlmConfig config)
+    {
+        var endpoints = new List<string>();
+
+        if (config.Endpoints is { Length: > 0 })
         {
-            throw new InvalidOperationException(
-                $"Codex endpoint must use ws:// or wss:// scheme, got: '{endpoint}'");
+            foreach (var endpoint in config.Endpoints)
+            {
+                var trimmed = endpoint?.Trim();
+                if (!string.IsNullOrWhiteSpace(trimmed))
+                    endpoints.Add(trimmed);
+            }
         }
-        return new CodexChatClient(new Uri(endpoint), config.Model);
+
+        if (!string.IsNullOrWhiteSpace(config.Endpoint))
+            endpoints.Add(config.Endpoint.Trim());
+
+        if (endpoints.Count == 0)
+            endpoints.Add("ws://localhost:8080");
+
+        var deduped = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var endpoint in endpoints)
+        {
+            if (seen.Add(endpoint))
+                deduped.Add(endpoint);
+        }
+
+        foreach (var endpoint in deduped)
+        {
+            if (!endpoint.StartsWith("ws://", StringComparison.OrdinalIgnoreCase) &&
+                !endpoint.StartsWith("wss://", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"Codex endpoint must use ws:// or wss:// scheme, got: '{endpoint}'");
+            }
+        }
+
+        return deduped;
     }
 }

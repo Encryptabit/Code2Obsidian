@@ -14,5 +14,7 @@ public sealed record LlmConfig(
     [property: JsonPropertyName("maxConcurrency")] int MaxConcurrency = 3,
     [property: JsonPropertyName("maxOutputTokens")] int MaxOutputTokens = 300,
     [property: JsonPropertyName("costPerInputToken")] decimal CostPerInputToken = 0m,
-    [property: JsonPropertyName("costPerOutputToken")] decimal CostPerOutputToken = 0m
+    [property: JsonPropertyName("costPerOutputToken")] decimal CostPerOutputToken = 0m,
+    [property: JsonPropertyName("endpoints")] string[]? Endpoints = null,
+    [property: JsonPropertyName("traceCodexWs")] bool TraceCodexWs = false
 );

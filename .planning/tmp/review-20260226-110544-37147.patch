@@ -1,0 +1,830 @@
+diff --git a/.planning/STATE.md b/.planning/STATE.md
+index 5048d0c..1922f47 100644
+--- a/.planning/STATE.md
++++ b/.planning/STATE.md
+@@ -5,23 +5,23 @@
+ See: .planning/PROJECT.md (updated 2026-02-25)
+ 
+ **Core value:** A developer can point this tool at any C# solution and get an Obsidian vault that lets them understand what the code does, how it connects, and where the danger zones are -- without reading every file.
+-**Current focus:** Phase 4 - Incremental Mode
++**Current focus:** Phase 5 - LLM Enrichment
+ 
+ ## Current Position
+ 
+-Phase: 4 of 5 (Incremental Mode) -- COMPLETE
+-Plan: 3 of 3 in current phase -- COMPLETE
+-Status: Phase 04 Complete
+-Last activity: 2026-02-26 -- Completed 04-03 (CLI integration and incremental orchestration)
++Phase: 5 of 5 (LLM Enrichment)
++Plan: 1 of 3 in current phase -- COMPLETE
++Status: Executing Phase 05
++Last activity: 2026-02-26 -- Completed 05-01 (LLM infrastructure foundation)
+ 
+-Progress: [#########.] 90%
++Progress: [##########] 93%
+ 
+ ## Performance Metrics
+ 
+ **Velocity:**
+-- Total plans completed: 9
+-- Average duration: 6.9 min
+-- Total execution time: 1.03 hours
++- Total plans completed: 10
++- Average duration: 7.0 min
++- Total execution time: 1.17 hours
+ 
+ **By Phase:**
+ 
+@@ -31,10 +31,11 @@ Progress: [#########.] 90%
+ | 02 | 2 | 8 min | 4 min |
+ | 03 | 2 | 8 min | 4 min |
+ | 04 | 3 | 39 min | 13 min |
++| 05 | 1 | 8 min | 8 min |
+ 
+ **Recent Trend:**
+-- Last 5 plans: 03-02 (4 min), 04-01 (17 min), 04-02 (9 min), 04-03 (13 min)
+-- Trend: Phase 04 averaging 13 min/plan due to integration complexity
++- Last 5 plans: 04-01 (17 min), 04-02 (9 min), 04-03 (13 min), 05-01 (8 min)
++- Trend: Phase 05 starting efficient with infrastructure-only plan
+ 
+ ## Accumulated Context
+ 
+@@ -79,6 +80,9 @@ Recent decisions affecting current work:
+ - [04-03]: IncrementalPipeline created per-case inside RunWithProgress lambda for correct Spectre.Console progress context lifetime
+ - [04-03]: State save uses full merged AnalysisResult so stored state is always a complete snapshot
+ - [04-03]: All incremental orchestration in Pipeline layer (IncrementalPipeline), Program.cs only routes CLI flags (INFR-06)
++- [05-01]: Anthropic SDK 12.8.0 uses ClientOptions { ApiKey } constructor, not string constructor
++- [05-01]: Unknown LLM providers fall back to OpenAI-compatible endpoint when config.Endpoint is set
++- [05-01]: BodySource added as optional last parameter with null default to avoid breaking merger stub construction
+ 
+ ### Pending Todos
+ 
+@@ -86,10 +90,10 @@ None yet.
+ 
+ ### Blockers/Concerns
+ 
+-- Anthropic C# SDK is in beta (12.4.0) -- monitor for breaking changes during Phase 5
++- Anthropic C# SDK 12.8.0 installed and working -- constructor uses ClientOptions, not string (verified)
+ 
+ ## Session Continuity
+ 
+ Last session: 2026-02-26
+-Stopped at: Phase 5 context gathered
+-Resume file: .planning/phases/05-llm-enrichment/05-CONTEXT.md
++Stopped at: Completed 05-01-PLAN.md
++Resume file: .planning/phases/05-llm-enrichment/05-02-PLAN.md
+diff --git a/.planning/phases/05-llm-enrichment/05-01-SUMMARY.md b/.planning/phases/05-llm-enrichment/05-01-SUMMARY.md
+new file mode 100644
+index 0000000..d3377ae
+--- /dev/null
++++ b/.planning/phases/05-llm-enrichment/05-01-SUMMARY.md
+@@ -0,0 +1,141 @@
++---
++phase: 05-llm-enrichment
++plan: 01
++subsystem: enrichment
++tags: [meai, anthropic, openai, ollama, sqlite, sha256, llm, ichatclient]
++
++# Dependency graph
++requires:
++  - phase: 04-incremental-mode
++    provides: "SQLite state schema V1, IncrementalState open-per-operation pattern"
++  - phase: 01-pipeline
++    provides: "IEnricher/EnrichedResult stubs, MethodInfo domain model, pipeline architecture"
++provides:
++  - "NuGet packages: MEAI 10.3.0, Anthropic 12.8.0, Microsoft.Extensions.AI.OpenAI 10.3.0, OllamaSharp 5.4.16"
++  - "LlmConfig record with provider, model, apiKey, endpoint, concurrency, cost fields"
++  - "LlmConfigLoader with JSON loading and $ENV_VAR expansion"
++  - "ChatClientFactory creating IChatClient for anthropic/openai/ollama/OpenAI-compatible endpoints"
++  - "InteractiveSetup wizard with Spectre.Console prompts and CI-safe non-interactive detection"
++  - "SQLite V2 migration adding summaries table"
++  - "SummaryCache with TryGet/Put/CountCached for LLM summary persistence"
++  - "ContentHasher with SHA256 hashing of method/type structural data"
++  - "EnrichedResult.MethodSummaries and TypeSummaries dictionaries"
++  - "MethodInfo.BodySource property populated from Roslyn syntax nodes"
++affects: [05-02-PLAN, 05-03-PLAN]
++
++# Tech tracking
++tech-stack:
++  added: [Microsoft.Extensions.AI 10.3.0, Anthropic 12.8.0, Microsoft.Extensions.AI.OpenAI 10.3.0, OllamaSharp 5.4.16]
++  patterns: [MEAI IChatClient abstraction, provider factory pattern, open-per-operation SQLite, content-hash cache invalidation]
++
++key-files:
++  created:
++    - Enrichment/Config/LlmConfig.cs
++    - Enrichment/Config/LlmConfigLoader.cs
++    - Enrichment/Config/ChatClientFactory.cs
++    - Enrichment/Config/InteractiveSetup.cs
++    - Enrichment/SummaryCache.cs
++    - Enrichment/ContentHasher.cs
++  modified:
++    - Code2Obsidian.csproj
++    - Analysis/Models/MethodInfo.cs
++    - Analysis/Analyzers/MethodAnalyzer.cs
++    - Enrichment/EnrichedResult.cs
++    - Incremental/StateSchema.cs
++
++key-decisions:
++  - "Anthropic SDK 12.8.0 uses ClientOptions { ApiKey } constructor, not string constructor"
++  - "Unknown providers fall back to OpenAI-compatible endpoint if config.Endpoint is set"
++  - "BodySource added as optional last parameter with null default to avoid breaking existing call sites"
++
++patterns-established:
++  - "Provider factory: ChatClientFactory isolates all provider-specific code; enricher uses only IChatClient"
++  - "Config loading: JSON config + $ENV_VAR expansion + CLI override pattern for secrets management"
++  - "Content hash: SHA256 of structural data (signature, body, deps, callers, complexity) for cache invalidation"
++
++requirements-completed: [LLM-02, LLM-03, LLM-04]
++
++# Metrics
++duration: 8min
++completed: 2026-02-26
++---
++
++# Phase 5 Plan 1: LLM Infrastructure Foundation Summary
++
++**MEAI provider packages installed with IChatClient factory, JSON config with env var expansion, SQLite V2 summaries table, SHA256 content hashing, and EnrichedResult summary dictionaries**
++
++## Performance
++
++- **Duration:** 8 min
++- **Started:** 2026-02-26T18:55:23Z
++- **Completed:** 2026-02-26T19:03:32Z
++- **Tasks:** 2
++- **Files modified:** 11
++
++## Accomplishments
++- Installed MEAI 10.3.0, Anthropic 12.8.0, OpenAI adapter 10.3.0, OllamaSharp 5.4.16 with zero version conflicts
++- Built complete config infrastructure: JSON loading with $ENV_VAR expansion, IChatClient factory for 3 providers + OpenAI-compatible fallback, interactive Spectre.Console setup wizard
++- Extended SQLite schema from V1 to V2 with summaries table, following existing migration pattern
++- Implemented SHA256 content hashing covering signature, body source, doc comments, callees, callers, and complexity
++- Extended EnrichedResult with MethodSummaries and TypeSummaries dictionaries (empty when no enrichment)
++
++## Task Commits
++
++Each task was committed atomically:
++
++1. **Task 1: NuGet packages, config model, config loader, ChatClientFactory, and interactive setup** - `42bdcb0` (feat)
++2. **Task 2: SQLite V2 migration, SummaryCache, ContentHasher, and EnrichedResult extension** - `a596250` (feat)
++
++## Files Created/Modified
++- `Code2Obsidian.csproj` - Added 4 NuGet package references for LLM providers
++- `Enrichment/Config/LlmConfig.cs` - Sealed record with provider, model, apiKey, endpoint, concurrency, cost fields
++- `Enrichment/Config/LlmConfigLoader.cs` - JSON config loading with $ENV_VAR expansion for API keys
++- `Enrichment/Config/ChatClientFactory.cs` - IChatClient factory for anthropic/openai/ollama with OpenAI-compatible fallback
++- `Enrichment/Config/InteractiveSetup.cs` - Spectre.Console setup wizard with CI-safe non-interactive detection
++- `Analysis/Models/MethodInfo.cs` - Added BodySource property for content hash cache invalidation
++- `Analysis/Analyzers/MethodAnalyzer.cs` - Extracts body source from Roslyn syntax nodes (block + expression bodies)
++- `Incremental/StateSchema.cs` - V2 migration adding summaries table with content_hash index
++- `Enrichment/SummaryCache.cs` - SQLite read/write for summaries table with graceful corruption handling
++- `Enrichment/ContentHasher.cs` - SHA256 hashing of method/type structural data
++- `Enrichment/EnrichedResult.cs` - Added MethodSummaries and TypeSummaries dictionaries
++
++## Decisions Made
++- Anthropic SDK 12.8.0 uses `new AnthropicClient(new ClientOptions { ApiKey = ... })` rather than a string constructor (discovered during API verification)
++- Unknown providers fall back to OpenAI-compatible endpoint when `config.Endpoint` is set, enabling Groq/Together/Azure OpenAI without code changes
++- BodySource added as optional last positional parameter with null default to avoid breaking AnalysisResultMerger stub construction
++
++## Deviations from Plan
++
++### Auto-fixed Issues
++
++**1. [Rule 1 - Bug] Anthropic SDK constructor signature**
++- **Found during:** Task 1 (ChatClientFactory implementation)
++- **Issue:** Plan specified `new AnthropicClient(new() { ApiKey = apiKey })` but Anthropic 12.8.0 requires `new ClientOptions { ApiKey = apiKey }`
++- **Fix:** Used correct `Anthropic.Core.ClientOptions` type with `using Anthropic.Core` import
++- **Files modified:** Enrichment/Config/ChatClientFactory.cs
++- **Verification:** `dotnet build` succeeds, API test project compiles
++- **Committed in:** 42bdcb0 (Task 1 commit)
++
++---
++
++**Total deviations:** 1 auto-fixed (1 bug)
++**Impact on plan:** Minor constructor signature difference in Anthropic SDK. No scope creep.
++
++## Issues Encountered
++None.
++
++## User Setup Required
++None - no external service configuration required.
++
++## Next Phase Readiness
++- All infrastructure for LlmEnricher (Plan 02) is in place: IChatClient factory, summary cache, content hasher, EnrichedResult dictionaries
++- CLI integration (Plan 03) has config loading and interactive setup ready
++- Project builds cleanly with all 4 LLM provider packages
++
++## Self-Check: PASSED
++
++All 11 created/modified files verified present. Both task commits (42bdcb0, a596250) verified in git log. Build succeeds with zero errors and zero warnings.
++
++---
++*Phase: 05-llm-enrichment*
++*Completed: 2026-02-26*
+diff --git a/Analysis/Analyzers/MethodAnalyzer.cs b/Analysis/Analyzers/MethodAnalyzer.cs
+index c666aa8..dbd016a 100644
+--- a/Analysis/Analyzers/MethodAnalyzer.cs
++++ b/Analysis/Analyzers/MethodAnalyzer.cs
+@@ -107,6 +107,12 @@ public sealed class MethodAnalyzer : IAnalyzer
+                         ? TypeId.FromSymbol(containingType)
+                         : new TypeId("global");
+ 
++                    // Extract body source for content hashing (LLM cache invalidation)
++                    var bodySource = declaration.Body?.ToFullString()
++                        ?? (declaration is MethodDeclarationSyntax methodDecl
++                            ? methodDecl.ExpressionBody?.ToFullString()
++                            : null);
++
+                     var methodInfo = new Models.MethodInfo(
+                         Id: methodId,
+                         Name: symbol.Name,
+@@ -118,7 +124,8 @@ public sealed class MethodAnalyzer : IAnalyzer
+                         Namespace: containingType?.ContainingNamespace?.ToDisplayString() ?? "",
+                         ProjectName: project.Name,
+                         AccessModifier: AnalysisHelpers.AccessibilityToString(symbol.DeclaredAccessibility),
+-                        CyclomaticComplexity: AnalysisHelpers.ComputeCyclomaticComplexity(declaration)
++                        CyclomaticComplexity: AnalysisHelpers.ComputeCyclomaticComplexity(declaration),
++                        BodySource: bodySource
+                     );
+ 
+                     builder.AddMethod(methodInfo);
+diff --git a/Analysis/Models/MethodInfo.cs b/Analysis/Models/MethodInfo.cs
+index a23461d..ad5a128 100644
+--- a/Analysis/Models/MethodInfo.cs
++++ b/Analysis/Models/MethodInfo.cs
+@@ -15,5 +15,6 @@ public sealed record MethodInfo(
+     string Namespace,
+     string ProjectName,
+     string AccessModifier,
+-    int CyclomaticComplexity
++    int CyclomaticComplexity,
++    string? BodySource = null
+ );
+diff --git a/Code2Obsidian.csproj b/Code2Obsidian.csproj
+index 5284fe5..5468ee4 100644
+--- a/Code2Obsidian.csproj
++++ b/Code2Obsidian.csproj
+@@ -8,11 +8,15 @@
+   </PropertyGroup>
+ 
+   <ItemGroup>
++    <PackageReference Include="Anthropic" Version="12.8.0" />
+     <PackageReference Include="LibGit2Sharp" Version="0.31.0" />
+     <PackageReference Include="Microsoft.Build.Locator" Version="1.9.1" />
+     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="4.14.0" />
+     <PackageReference Include="Microsoft.CodeAnalysis.Workspaces.MSBuild" Version="4.14.0" />
+     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.11" />
++    <PackageReference Include="Microsoft.Extensions.AI" Version="10.3.0" />
++    <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.3.0" />
++    <PackageReference Include="OllamaSharp" Version="5.4.16" />
+     <PackageReference Include="System.CommandLine" Version="2.0.3" />
+     <PackageReference Include="Spectre.Console" Version="0.54.0" />
+   </ItemGroup>
+diff --git a/Enrichment/Config/ChatClientFactory.cs b/Enrichment/Config/ChatClientFactory.cs
+new file mode 100644
+index 0000000..8a9009f
+--- /dev/null
++++ b/Enrichment/Config/ChatClientFactory.cs
+@@ -0,0 +1,90 @@
++using Anthropic;
++using Anthropic.Core;
++using Microsoft.Extensions.AI;
++using OllamaSharp;
++using OpenAI;
++using System.ClientModel;
++
++namespace Code2Obsidian.Enrichment.Config;
++
++/// <summary>
++/// Creates an IChatClient from LLM configuration.
++/// Provider-specific code is isolated here; the enricher only knows IChatClient.
++/// Known providers (anthropic, openai, ollama) have convenience factories.
++/// Unknown providers fall back to OpenAI-compatible endpoint if configured.
++/// </summary>
++public static class ChatClientFactory
++{
++    private static readonly Dictionary<string, Func<LlmConfig, string, IChatClient>> KnownProviders = new(StringComparer.OrdinalIgnoreCase)
++    {
++        ["anthropic"] = CreateAnthropicClient,
++        ["openai"] = CreateOpenAIClient,
++        ["ollama"] = CreateOllamaClient
++    };
++
++    /// <summary>
++    /// Creates an IChatClient from the given configuration.
++    /// </summary>
++    /// <exception cref="InvalidOperationException">
++    /// Thrown when the API key env var was not resolved, or when an unknown provider
++    /// has no endpoint configured.
++    /// </exception>
++    public static IChatClient CreateFromConfig(LlmConfig config)
++    {
++        var apiKey = ResolveApiKey(config);
++
++        if (KnownProviders.TryGetValue(config.Provider, out var factory))
++        {
++            return factory(config, apiKey);
++        }
++
++        // Unknown provider: try OpenAI-compatible endpoint fallback
++        if (!string.IsNullOrEmpty(config.Endpoint))
++        {
++            return CreateOpenAICompatibleClient(config, apiKey);
++        }
++
++        throw new InvalidOperationException(
++            $"Unknown LLM provider '{config.Provider}'. " +
++            $"Known providers: {string.Join(", ", KnownProviders.Keys)}. " +
++            "For other MEAI-compatible providers, set 'endpoint' to an OpenAI-compatible API URL.");
++    }
++
++    private static string ResolveApiKey(LlmConfig config)
++    {
++        if (config.ApiKey is { } key && key.StartsWith('$'))
++        {
++            throw new InvalidOperationException(
++                $"Environment variable '{key.Substring(1)}' is not set. " +
++                "Set it before running, or update the API key in your config file.");
++        }
++
++        return config.ApiKey ?? "";
++    }
++
++    private static IChatClient CreateAnthropicClient(LlmConfig config, string apiKey)
++    {
++        var client = new AnthropicClient(new ClientOptions { ApiKey = apiKey });
++        return client.AsIChatClient(config.Model);
++    }
++
++    private static IChatClient CreateOpenAIClient(LlmConfig config, string apiKey)
++    {
++        var client = new OpenAIClient(apiKey);
++        return client.GetChatClient(config.Model).AsIChatClient();
++    }
++
++    private static IChatClient CreateOllamaClient(LlmConfig config, string _)
++    {
++        var endpoint = config.Endpoint ?? "http://localhost:11434";
++        return new OllamaApiClient(new Uri(endpoint), config.Model);
++    }
++
++    private static IChatClient CreateOpenAICompatibleClient(LlmConfig config, string apiKey)
++    {
++        var credential = new ApiKeyCredential(string.IsNullOrEmpty(apiKey) ? "no-key" : apiKey);
++        var options = new OpenAIClientOptions { Endpoint = new Uri(config.Endpoint!) };
++        var client = new OpenAIClient(credential, options);
++        return client.GetChatClient(config.Model).AsIChatClient();
++    }
++}
+diff --git a/Enrichment/Config/InteractiveSetup.cs b/Enrichment/Config/InteractiveSetup.cs
+new file mode 100644
+index 0000000..fe3f963
+--- /dev/null
++++ b/Enrichment/Config/InteractiveSetup.cs
+@@ -0,0 +1,98 @@
++using Spectre.Console;
++
++namespace Code2Obsidian.Enrichment.Config;
++
++/// <summary>
++/// Interactive setup wizard for LLM configuration.
++/// Uses Spectre.Console prompts to walk users through provider selection and config creation.
++/// Returns null in non-interactive environments (CI, piped input).
++/// </summary>
++public static class InteractiveSetup
++{
++    private static readonly Dictionary<string, string> DefaultModels = new(StringComparer.OrdinalIgnoreCase)
++    {
++        ["anthropic"] = "claude-haiku-4-5",
++        ["openai"] = "gpt-4o-mini",
++        ["ollama"] = "llama3.1"
++    };
++
++    private static readonly Dictionary<string, string> DefaultEnvVars = new(StringComparer.OrdinalIgnoreCase)
++    {
++        ["anthropic"] = "$ANTHROPIC_API_KEY",
++        ["openai"] = "$OPENAI_API_KEY"
++    };
++
++    /// <summary>
++    /// Runs the interactive setup wizard and saves the config to the specified path.
++    /// Returns the created config, or null if the terminal is non-interactive.
++    /// </summary>
++    public static LlmConfig? RunSetup(string configPath)
++    {
++        if (Console.IsInputRedirected || !Environment.UserInteractive)
++        {
++            return null;
++        }
++
++        AnsiConsole.MarkupLine("[bold blue]LLM Enrichment Setup[/]");
++        AnsiConsole.MarkupLine("No LLM configuration found. Let's set one up.\n");
++
++        // Provider selection
++        var provider = AnsiConsole.Prompt(
++            new SelectionPrompt<string>()
++                .Title("Select an LLM [green]provider[/]:")
++                .AddChoices("anthropic", "openai", "ollama"));
++
++        // Model name
++        var defaultModel = DefaultModels.GetValueOrDefault(provider, "");
++        var model = AnsiConsole.Prompt(
++            new TextPrompt<string>("Enter [green]model name[/]:")
++                .DefaultValue(defaultModel)
++                .AllowEmpty());
++
++        if (string.IsNullOrWhiteSpace(model))
++            model = defaultModel;
++
++        // Provider-specific prompts
++        string? apiKey = null;
++        string? endpoint = null;
++
++        if (provider is "anthropic" or "openai")
++        {
++            var defaultEnvVar = DefaultEnvVars.GetValueOrDefault(provider, "");
++            var keyInput = AnsiConsole.Prompt(
++                new TextPrompt<string>($"Enter [green]API key[/] or env var name (e.g. {Markup.Escape(defaultEnvVar)}):")
++                    .DefaultValue(defaultEnvVar)
++                    .AllowEmpty());
++
++            apiKey = string.IsNullOrWhiteSpace(keyInput) ? defaultEnvVar : keyInput;
++        }
++        else if (provider == "ollama")
++        {
++            endpoint = AnsiConsole.Prompt(
++                new TextPrompt<string>("Enter [green]Ollama endpoint[/]:")
++                    .DefaultValue("http://localhost:11434")
++                    .AllowEmpty());
++
++            if (string.IsNullOrWhiteSpace(endpoint))
++                endpoint = "http://localhost:11434";
++        }
++
++        // Max concurrency
++        var maxConcurrency = AnsiConsole.Prompt(
++            new TextPrompt<int>("Enter [green]max concurrency[/] (parallel LLM requests):")
++                .DefaultValue(3));
++
++        var config = new LlmConfig(
++            Provider: provider,
++            Model: model,
++            ApiKey: apiKey,
++            Endpoint: endpoint,
++            MaxConcurrency: maxConcurrency
++        );
++
++        LlmConfigLoader.Save(configPath, config);
++        AnsiConsole.MarkupLine($"\n[green]Config saved to[/] {Markup.Escape(configPath)}");
++
++        return config;
++    }
++}
+diff --git a/Enrichment/Config/LlmConfig.cs b/Enrichment/Config/LlmConfig.cs
+new file mode 100644
+index 0000000..f28eb8e
+--- /dev/null
++++ b/Enrichment/Config/LlmConfig.cs
+@@ -0,0 +1,18 @@
++using System.Text.Json.Serialization;
++
++namespace Code2Obsidian.Enrichment.Config;
++
++/// <summary>
++/// Strongly-typed configuration for LLM provider settings.
++/// Loaded from code2obsidian.llm.json, with CLI flag overrides.
++/// </summary>
++public sealed record LlmConfig(
++    [property: JsonPropertyName("provider")] string Provider,
++    [property: JsonPropertyName("model")] string Model,
++    [property: JsonPropertyName("apiKey")] string? ApiKey = null,
++    [property: JsonPropertyName("endpoint")] string? Endpoint = null,
++    [property: JsonPropertyName("maxConcurrency")] int MaxConcurrency = 3,
++    [property: JsonPropertyName("maxOutputTokens")] int MaxOutputTokens = 300,
++    [property: JsonPropertyName("costPerInputToken")] decimal CostPerInputToken = 0m,
++    [property: JsonPropertyName("costPerOutputToken")] decimal CostPerOutputToken = 0m
++);
+diff --git a/Enrichment/Config/LlmConfigLoader.cs b/Enrichment/Config/LlmConfigLoader.cs
+new file mode 100644
+index 0000000..a64c4d3
+--- /dev/null
++++ b/Enrichment/Config/LlmConfigLoader.cs
+@@ -0,0 +1,58 @@
++using System.Text.Json;
++
++namespace Code2Obsidian.Enrichment.Config;
++
++/// <summary>
++/// Loads and saves LLM configuration from/to a JSON file.
++/// Supports environment variable expansion for API keys using $VAR_NAME syntax.
++/// </summary>
++public static class LlmConfigLoader
++{
++    private static readonly JsonSerializerOptions SerializerOptions = new()
++    {
++        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
++        WriteIndented = true
++    };
++
++    /// <summary>
++    /// Attempts to load LLM config from the specified path.
++    /// Returns null if the file does not exist.
++    /// Expands API key values starting with '$' by looking up the environment variable.
++    /// </summary>
++    public static LlmConfig? TryLoad(string configPath)
++    {
++        if (!File.Exists(configPath))
++            return null;
++
++        var json = File.ReadAllText(configPath);
++        var config = JsonSerializer.Deserialize<LlmConfig>(json, SerializerOptions);
++
++        if (config is null)
++            return null;
++
++        // Expand environment variable reference in ApiKey
++        if (config.ApiKey is { } apiKey && apiKey.StartsWith('$'))
++        {
++            var envVarName = apiKey.Substring(1);
++            var envValue = Environment.GetEnvironmentVariable(envVarName);
++
++            if (!string.IsNullOrEmpty(envValue))
++            {
++                config = config with { ApiKey = envValue };
++            }
++            // If env var is null/empty, leave the $VAR string as-is.
++            // ChatClientFactory will fail with a clear message.
++        }
++
++        return config;
++    }
++
++    /// <summary>
++    /// Serializes and writes the config to disk with indented JSON formatting.
++    /// </summary>
++    public static void Save(string configPath, LlmConfig config)
++    {
++        var json = JsonSerializer.Serialize(config, SerializerOptions);
++        File.WriteAllText(configPath, json);
++    }
++}
+diff --git a/Enrichment/ContentHasher.cs b/Enrichment/ContentHasher.cs
+new file mode 100644
+index 0000000..da68da6
+--- /dev/null
++++ b/Enrichment/ContentHasher.cs
+@@ -0,0 +1,80 @@
++using System.Security.Cryptography;
++using System.Text;
++using Code2Obsidian.Analysis.Models;
++
++namespace Code2Obsidian.Enrichment;
++
++/// <summary>
++/// Computes deterministic SHA256 content hashes for methods and types.
++/// Hash covers structural data so that any change to signature, body, dependencies,
++/// callers, or complexity triggers cache invalidation and re-enrichment.
++/// </summary>
++public static class ContentHasher
++{
++    /// <summary>
++    /// Computes a SHA256 hash covering the method's signature, body source, doc comment,
++    /// sorted callee IDs, sorted caller IDs, and cyclomatic complexity.
++    /// Per locked decision: cache key covers signature, body, dependencies, and callers.
++    /// </summary>
++    public static string ComputeMethodHash(MethodInfo method, CallGraph callGraph)
++    {
++        var sb = new StringBuilder();
++
++        sb.AppendLine(method.DisplaySignature);
++        sb.AppendLine(method.BodySource ?? "");
++        sb.AppendLine(method.DocComment ?? "");
++
++        // Sorted callee IDs
++        var callees = callGraph.GetCallees(method.Id)
++            .Select(id => id.Value)
++            .OrderBy(id => id, StringComparer.Ordinal);
++        foreach (var callee in callees)
++        {
++            sb.Append("calls:");
++            sb.AppendLine(callee);
++        }
++
++        // Sorted caller IDs
++        var callers = callGraph.GetCallers(method.Id)
++            .Select(id => id.Value)
++            .OrderBy(id => id, StringComparer.Ordinal);
++        foreach (var caller in callers)
++        {
++            sb.Append("calledby:");
++            sb.AppendLine(caller);
++        }
++
++        sb.AppendLine(method.CyclomaticComplexity.ToString());
++
++        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(sb.ToString()));
++        return Convert.ToHexString(hash);
++    }
++
++    /// <summary>
++    /// Computes a SHA256 hash covering the type's structural data:
++    /// full name, doc comment, base class, interfaces, method count, and property count.
++    /// Captures structural changes that should trigger re-summarization.
++    /// </summary>
++    public static string ComputeTypeHash(TypeInfo type)
++    {
++        var sb = new StringBuilder();
++
++        sb.AppendLine(type.FullName);
++        sb.AppendLine(type.DocComment ?? "");
++        sb.AppendLine(type.BaseClassFullName ?? "");
++
++        // Sorted interface names
++        var interfaces = type.InterfaceFullNames
++            .OrderBy(name => name, StringComparer.Ordinal);
++        foreach (var iface in interfaces)
++        {
++            sb.AppendLine(iface);
++        }
++
++        sb.AppendLine(type.MethodIds.Count.ToString());
++        sb.AppendLine(type.Properties.Count.ToString());
++
++        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(sb.ToString()));
++        return Convert.ToHexString(hash);
++    }
++}
+diff --git a/Enrichment/EnrichedResult.cs b/Enrichment/EnrichedResult.cs
+index 8748f6c..d57119a 100644
+--- a/Enrichment/EnrichedResult.cs
++++ b/Enrichment/EnrichedResult.cs
+@@ -13,6 +13,18 @@ public sealed class EnrichedResult
+     /// </summary>
+     public AnalysisResult Analysis { get; }
+ 
++    /// <summary>
++    /// LLM-generated summaries for methods, keyed by MethodId.Value.
++    /// Empty when --enrich is not used; emitter renders no Summary section in that case.
++    /// </summary>
++    public Dictionary<string, string> MethodSummaries { get; } = new();
++
++    /// <summary>
++    /// LLM-generated summaries for types, keyed by TypeId.Value.
++    /// Empty when --enrich is not used; emitter renders no Summary section in that case.
++    /// </summary>
++    public Dictionary<string, string> TypeSummaries { get; } = new();
++
+     public EnrichedResult(AnalysisResult analysis)
+     {
+         Analysis = analysis;
+diff --git a/Enrichment/SummaryCache.cs b/Enrichment/SummaryCache.cs
+new file mode 100644
+index 0000000..3a6cbdf
+--- /dev/null
++++ b/Enrichment/SummaryCache.cs
+@@ -0,0 +1,103 @@
++using Code2Obsidian.Incremental;
++using Microsoft.Data.Sqlite;
++
++namespace Code2Obsidian.Enrichment;
++
++/// <summary>
++/// Reads and writes LLM-generated summaries in the SQLite summaries table.
++/// Follows IncrementalState's open-per-operation pattern (NOT IDisposable).
++/// Cache entries are keyed by entity_id + content_hash; a stale hash means cache miss.
++/// </summary>
++public sealed class SummaryCache
++{
++    private readonly string _dbPath;
++
++    public SummaryCache(string dbPath)
++    {
++        _dbPath = dbPath;
++    }
++
++    /// <summary>
++    /// Attempts to retrieve a cached summary for the given entity and content hash.
++    /// Returns null on cache miss (no entry or stale hash) or on database error (graceful corruption).
++    /// </summary>
++    public string? TryGet(string entityId, string currentContentHash)
++    {
++        try
++        {
++            using var connection = OpenConnection();
++
++            using var cmd = connection.CreateCommand();
++            cmd.CommandText = "SELECT summary_text FROM summaries WHERE entity_id = @id AND content_hash = @hash";
++            cmd.Parameters.AddWithValue("@id", entityId);
++            cmd.Parameters.AddWithValue("@hash", currentContentHash);
++
++            return cmd.ExecuteScalar() as string;
++        }
++        catch (SqliteException)
++        {
++            // Graceful corruption: treat as cache miss
++            return null;
++        }
++    }
++
++    /// <summary>
++    /// Stores or updates a summary for the given entity with its content hash and model ID.
++    /// Uses INSERT OR REPLACE to handle both new entries and hash changes.
++    /// </summary>
++    public void Put(string entityId, string contentHash, string summaryText, string modelId)
++    {
++        using var connection = OpenConnection();
++
++        using var cmd = connection.CreateCommand();
++        cmd.CommandText = """
++            INSERT OR REPLACE INTO summaries (entity_id, content_hash, summary_text, model_id, created_at)
++            VALUES (@id, @hash, @text, @model, @time)
++            """;
++        cmd.Parameters.AddWithValue("@id", entityId);
++        cmd.Parameters.AddWithValue("@hash", contentHash);
++        cmd.Parameters.AddWithValue("@text", summaryText);
++        cmd.Parameters.AddWithValue("@model", modelId);
++        cmd.Parameters.AddWithValue("@time", DateTime.UtcNow.ToString("o"));
++
++        cmd.ExecuteNonQuery();
++    }
++
++    /// <summary>
++    /// Counts how many of the given entities already have a matching cache entry.
++    /// Used by cost estimator to determine how many entities need LLM calls.
++    /// </summary>
++    public int CountCached(IEnumerable<(string entityId, string contentHash)> entities)
++    {
++        try
++        {
++            using var connection = OpenConnection();
++            int count = 0;
++
++            foreach (var (entityId, contentHash) in entities)
++            {
++                using var cmd = connection.CreateCommand();
++                cmd.CommandText = "SELECT 1 FROM summaries WHERE entity_id = @id AND content_hash = @hash";
++                cmd.Parameters.AddWithValue("@id", entityId);
++                cmd.Parameters.AddWithValue("@hash", contentHash);
++
++                if (cmd.ExecuteScalar() is not null)
++                    count++;
++            }
++
++            return count;
++        }
++        catch (SqliteException)
++        {
++            return 0;
++        }
++    }
++
++    private SqliteConnection OpenConnection()
++    {
++        var connection = new SqliteConnection($"Data Source={_dbPath}");
++        connection.Open();
++        StateSchema.EnsureSchema(connection);
++        return connection;
++    }
++}
+diff --git a/Incremental/StateSchema.cs b/Incremental/StateSchema.cs
+index a910179..a6b3fb2 100644
+--- a/Incremental/StateSchema.cs
++++ b/Incremental/StateSchema.cs
+@@ -33,6 +33,38 @@ public static class StateSchema
+         {
+             MigrateToV1(connection);
+         }
++
++        if (version < 2)
++        {
++            MigrateToV2(connection);
++        }
++    }
++
++    /// <summary>
++    /// Adds the summaries table for LLM enrichment caching.
++    /// Existing V1 tables are untouched; IF NOT EXISTS ensures idempotency.
++    /// </summary>
++    private static void MigrateToV2(SqliteConnection connection)
++    {
++        using var transaction = connection.BeginTransaction();
++
++        using var cmd = connection.CreateCommand();
++        cmd.CommandText = """
++            CREATE TABLE IF NOT EXISTS summaries (
++                entity_id TEXT PRIMARY KEY,
++                content_hash TEXT NOT NULL,
++                summary_text TEXT NOT NULL,
++                model_id TEXT NOT NULL,
++                created_at TEXT NOT NULL
++            );
++
++            CREATE INDEX IF NOT EXISTS idx_summaries_hash ON summaries(content_hash);
++
++            PRAGMA user_version = 2;
++            """;
++
++        cmd.ExecuteNonQuery();
++        transaction.Commit();
+     }
+ 
+     /// <summary>

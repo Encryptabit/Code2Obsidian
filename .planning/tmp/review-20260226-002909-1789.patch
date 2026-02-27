@@ -1,0 +1,337 @@
+diff --git a/.planning/STATE.md b/.planning/STATE.md
+index 1efd448..253893f 100644
+--- a/.planning/STATE.md
++++ b/.planning/STATE.md
+@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-02-25)
+ ## Current Position
+ 
+ Phase: 3 of 5 (Output Quality & Metrics)
+-Plan: 0 of ? in current phase
+-Status: Phase 03 context gathered. Ready for planning.
+-Last activity: 2026-02-25 -- Captured phase 3 context (all decisions deferred to Claude)
++Plan: 1 of 2 in current phase
++Status: Executing phase 03 plans
++Last activity: 2026-02-26 -- Completed 03-01 (metadata fields + cyclomatic complexity)
+ 
+-Progress: [####......] 40%
++Progress: [#####.....] 50%
+ 
+ ## Performance Metrics
+ 
+ **Velocity:**
+-- Total plans completed: 4
+-- Average duration: 4.8 min
+-- Total execution time: 0.32 hours
++- Total plans completed: 5
++- Average duration: 4.6 min
++- Total execution time: 0.38 hours
+ 
+ **By Phase:**
+ 
+@@ -29,9 +29,10 @@ Progress: [####......] 40%
+ |-------|-------|-------|----------|
+ | 01 | 2 | 11 min | 5.5 min |
+ | 02 | 2 | 8 min | 4 min |
++| 03 | 1 | 4 min | 4 min |
+ 
+ **Recent Trend:**
+-- Last 5 plans: 01-01 (5 min), 01-02 (6 min), 02-01 (5 min), 02-02 (3 min)
++- Last 5 plans: 01-02 (6 min), 02-01 (5 min), 02-02 (3 min), 03-01 (4 min)
+ - Trend: improving
+ 
+ ## Accumulated Context
+@@ -58,6 +59,9 @@ Recent decisions affecting current work:
+ - [02-02]: Wikilink resolution uses knownTypes lookup -- user types get wikilinks, external types get plain text
+ - [02-02]: DI dependencies deduped by TypeNoteFullName across ALL constructors
+ - [02-02]: Interface notes use separate "Known Implementors" body section
++- [03-01]: Expression-bodied methods handled via MethodDeclarationSyntax cast for ExpressionBody access
++- [03-01]: ShouldDescend pruning excludes lambdas, local functions, anonymous methods from complexity count
++- [03-01]: Metadata propagation: project.Name flows through analyzer to domain model
+ 
+ ### Pending Todos
+ 
+@@ -69,6 +73,6 @@ None yet.
+ 
+ ## Session Continuity
+ 
+-Last session: 2026-02-25
+-Stopped at: Phase 3 context gathered
+-Resume file: .planning/phases/03-output-quality-metrics/03-CONTEXT.md
++Last session: 2026-02-26
++Stopped at: Completed 03-01-PLAN.md
++Resume file: .planning/phases/03-output-quality-metrics/03-02-PLAN.md
+diff --git a/.planning/phases/03-output-quality-metrics/03-01-SUMMARY.md b/.planning/phases/03-output-quality-metrics/03-01-SUMMARY.md
+new file mode 100644
+index 0000000..134821a
+--- /dev/null
++++ b/.planning/phases/03-output-quality-metrics/03-01-SUMMARY.md
+@@ -0,0 +1,110 @@
++---
++phase: 03-output-quality-metrics
++plan: 01
++subsystem: analysis
++tags: [roslyn, cyclomatic-complexity, domain-models, metadata]
++
++# Dependency graph
++requires:
++  - phase: 02-type-system-navigation
++    provides: "TypeInfo/MethodInfo domain models, AnalysisHelpers, TypeAnalyzer, MethodAnalyzer"
++provides:
++  - "MethodInfo with Namespace, ProjectName, AccessModifier, CyclomaticComplexity fields"
++  - "TypeInfo with ProjectName, AccessModifier fields"
++  - "ComputeCyclomaticComplexity static method in AnalysisHelpers"
++affects: [03-02-PLAN, emitter-frontmatter, dataview-queries]
++
++# Tech tracking
++tech-stack:
++  added: []
++  patterns: ["syntax-tree walking with descendant pruning for complexity"]
++
++key-files:
++  created: []
++  modified:
++    - "Analysis/Models/MethodInfo.cs"
++    - "Analysis/Models/TypeInfo.cs"
++    - "Analysis/Analyzers/AnalysisHelpers.cs"
++    - "Analysis/Analyzers/MethodAnalyzer.cs"
++    - "Analysis/Analyzers/TypeAnalyzer.cs"
++
++key-decisions:
++  - "Expression-bodied methods handled via MethodDeclarationSyntax cast for ExpressionBody access"
++  - "ShouldDescend pruning excludes lambdas, local functions, anonymous methods from complexity count"
++  - "TypeInfo has 17 positional parameters (plan stated 16, but original had 15 + 2 new = 17)"
++
++patterns-established:
++  - "Complexity calculation: DescendantNodes(ShouldDescend) pattern for selective tree traversal"
++  - "Metadata propagation: project.Name flows through analyzer to domain model"
++
++requirements-completed: [OUTP-02, OUTP-03, OUTP-05]
++
++# Metrics
++duration: 4min
++completed: 2026-02-26
++---
++
++# Phase 3 Plan 1: Metadata Fields & Cyclomatic Complexity Summary
++
++**Extended MethodInfo/TypeInfo domain models with namespace, project name, access modifier, and cyclomatic complexity via Roslyn syntax-tree walking with lambda/local-function exclusion**
++
++## Performance
++
++- **Duration:** 4 min
++- **Started:** 2026-02-26T08:22:48Z
++- **Completed:** 2026-02-26T08:27:07Z
++- **Tasks:** 2
++- **Files modified:** 5
++
++## Accomplishments
++- MethodInfo extended with 4 new fields: Namespace, ProjectName, AccessModifier, CyclomaticComplexity (11 total params)
++- TypeInfo extended with 2 new fields: ProjectName, AccessModifier (17 total params)
++- ComputeCyclomaticComplexity handles 15 branch construct types with base value 1
++- Nested lambdas, local functions, and anonymous methods excluded from containing method's complexity via ShouldDescend pruning
++- MethodAnalyzer and TypeAnalyzer wired to populate all new fields from Roslyn symbols and project metadata
++
++## Task Commits
++
++Each task was committed atomically:
++
++1. **Task 1: Extend domain models and add CyclomaticComplexity calculator** - `d6e9810` (feat)
++2. **Task 2: Update MethodAnalyzer and TypeAnalyzer to populate new fields** - `65ba3da` (feat)
++
++## Files Created/Modified
++- `Analysis/Models/MethodInfo.cs` - Added Namespace, ProjectName, AccessModifier, CyclomaticComplexity positional parameters
++- `Analysis/Models/TypeInfo.cs` - Added ProjectName, AccessModifier positional parameters
++- `Analysis/Analyzers/AnalysisHelpers.cs` - Added ComputeCyclomaticComplexity and ShouldDescend methods, CSharp/Syntax usings
++- `Analysis/Analyzers/MethodAnalyzer.cs` - Populated 4 new MethodInfo fields from symbol/declaration/project
++- `Analysis/Analyzers/TypeAnalyzer.cs` - Added projectName parameter to ExtractTypeInfo, populated 2 new TypeInfo fields
++
++## Decisions Made
++- Expression-bodied methods: cast to MethodDeclarationSyntax to access ExpressionBody (BaseMethodDeclarationSyntax lacks it)
++- ShouldDescend pattern: prunes 4 nested construct types (SimpleLambda, ParenthesizedLambda, LocalFunction, AnonymousMethod) from complexity walk
++- Plan stated TypeInfo would have 16 params but original had 15 (not 14), so actual count is 17 -- this is a plan arithmetic correction, not a deviation
++
++## Deviations from Plan
++
++None - plan executed exactly as written.
++
++## Issues Encountered
++- No .sln file exists in the project root (only .csproj), so integration test against Code2Obsidian itself was not possible. Build verification confirms correctness.
++
++## User Setup Required
++
++None - no external service configuration required.
++
++## Next Phase Readiness
++- All domain model metadata fields are populated during analysis, ready for Plan 02 emitter to render expanded frontmatter
++- CyclomaticComplexity enables danger-tag thresholds and Dataview-compatible queryable fields
++- AccessModifier and ProjectName enable enhanced frontmatter grouping and filtering
++
++## Self-Check: PASSED
++
++- All 6 files verified present on disk
++- Commit d6e9810 (Task 1) verified in git log
++- Commit 65ba3da (Task 2) verified in git log
++- Build: 0 errors, 0 warnings
++
++---
++*Phase: 03-output-quality-metrics*
++*Completed: 2026-02-26*
+diff --git a/Analysis/Analyzers/AnalysisHelpers.cs b/Analysis/Analyzers/AnalysisHelpers.cs
+index e25c9b1..78fdbd3 100644
+--- a/Analysis/Analyzers/AnalysisHelpers.cs
++++ b/Analysis/Analyzers/AnalysisHelpers.cs
+@@ -1,4 +1,6 @@
+ using Microsoft.CodeAnalysis;
++using Microsoft.CodeAnalysis.CSharp;
++using Microsoft.CodeAnalysis.CSharp.Syntax;
+ 
+ namespace Code2Obsidian.Analysis.Analyzers;
+ 
+@@ -204,4 +206,68 @@ internal static class AnalysisHelpers
+         }
+         return b.ToString().Trim();
+     }
++
++    /// <summary>
++    /// Computes cyclomatic complexity for a method declaration via syntax-tree walking.
++    /// Base value is 1. Each branch construct adds 1. Nested lambdas and local functions
++    /// are excluded from the containing method's complexity count.
++    /// </summary>
++    public static int ComputeCyclomaticComplexity(BaseMethodDeclarationSyntax declaration)
++    {
++        // Determine the syntax node to walk: Body (block), ExpressionBody, or neither
++        SyntaxNode? walkTarget = declaration.Body;
++        if (walkTarget is null && declaration is MethodDeclarationSyntax methodDecl)
++        {
++            walkTarget = methodDecl.ExpressionBody;
++        }
++
++        // Abstract/extern methods with no body or expression body
++        if (walkTarget is null)
++            return 1;
++
++        int complexity = 1;
++
++        foreach (var node in walkTarget.DescendantNodes(ShouldDescend))
++        {
++            switch (node)
++            {
++                case IfStatementSyntax:
++                case WhileStatementSyntax:
++                case ForStatementSyntax:
++                case ForEachStatementSyntax:
++                case DoStatementSyntax:
++                case CaseSwitchLabelSyntax:
++                case CasePatternSwitchLabelSyntax:
++                case CatchClauseSyntax:
++                case ConditionalExpressionSyntax:
++                case ConditionalAccessExpressionSyntax:
++                    complexity++;
++                    break;
++
++                case BinaryExpressionSyntax binary when
++                    binary.IsKind(SyntaxKind.LogicalAndExpression) ||
++                    binary.IsKind(SyntaxKind.LogicalOrExpression) ||
++                    binary.IsKind(SyntaxKind.CoalesceExpression):
++                    complexity++;
++                    break;
++
++                case SwitchExpressionArmSyntax arm when arm.Pattern is not DiscardPatternSyntax:
++                    complexity++;
++                    break;
++            }
++        }
++
++        return complexity;
++    }
++
++    /// <summary>
++    /// Determines whether to descend into a syntax node during complexity traversal.
++    /// Prunes nested lambdas, anonymous methods, and local functions -- these have
++    /// their own complexity and should not inflate the containing method's count.
++    /// </summary>
++    private static bool ShouldDescend(SyntaxNode node) =>
++        node is not (SimpleLambdaExpressionSyntax
++            or ParenthesizedLambdaExpressionSyntax
++            or LocalFunctionStatementSyntax
++            or AnonymousMethodExpressionSyntax);
+ }
+diff --git a/Analysis/Analyzers/MethodAnalyzer.cs b/Analysis/Analyzers/MethodAnalyzer.cs
+index 1f8afc4..6044aa0 100644
+--- a/Analysis/Analyzers/MethodAnalyzer.cs
++++ b/Analysis/Analyzers/MethodAnalyzer.cs
+@@ -91,7 +91,11 @@ public sealed class MethodAnalyzer : IAnalyzer
+                         ContainingTypeId: typeId,
+                         FilePath: document.FilePath!,
+                         DisplaySignature: symbol.ToDisplayString(AnalysisHelpers.RichSignatureFormat),
+-                        DocComment: AnalysisHelpers.GetMethodDocstring(symbol)
++                        DocComment: AnalysisHelpers.GetMethodDocstring(symbol),
++                        Namespace: containingType?.ContainingNamespace?.ToDisplayString() ?? "",
++                        ProjectName: project.Name,
++                        AccessModifier: AnalysisHelpers.AccessibilityToString(symbol.DeclaredAccessibility),
++                        CyclomaticComplexity: AnalysisHelpers.ComputeCyclomaticComplexity(declaration)
+                     );
+ 
+                     builder.AddMethod(methodInfo);
+diff --git a/Analysis/Analyzers/TypeAnalyzer.cs b/Analysis/Analyzers/TypeAnalyzer.cs
+index e0ed7e3..8eebb45 100644
+--- a/Analysis/Analyzers/TypeAnalyzer.cs
++++ b/Analysis/Analyzers/TypeAnalyzer.cs
+@@ -72,7 +72,7 @@ public sealed class TypeAnalyzer : IAnalyzer
+                     if (symbol is null) continue;
+                     if (!AnalysisHelpers.IsUserType(symbol, context.ProjectAssemblyNames)) continue;
+ 
+-                    var typeInfo = ExtractTypeInfo(symbol, document.FilePath!, context.ProjectAssemblyNames);
++                    var typeInfo = ExtractTypeInfo(symbol, document.FilePath!, context.ProjectAssemblyNames, project.Name);
+                     builder.AddType(typeInfo);
+ 
+                     // Register implementors: only concrete types (class, record, struct) —
+@@ -98,7 +98,8 @@ public sealed class TypeAnalyzer : IAnalyzer
+     private static TypeInfo ExtractTypeInfo(
+         INamedTypeSymbol symbol,
+         string documentFilePath,
+-        IReadOnlySet<string> projectAssemblyNames)
++        IReadOnlySet<string> projectAssemblyNames,
++        string projectName)
+     {
+         var id = TypeId.FromSymbol(symbol);
+         var name = symbol.Name;
+@@ -190,7 +191,9 @@ public sealed class TypeAnalyzer : IAnalyzer
+             Fields: fields,
+             Constructors: constructors,
+             MethodIds: methodIds,
+-            DocComment: docComment);
++            DocComment: docComment,
++            ProjectName: projectName,
++            AccessModifier: AnalysisHelpers.AccessibilityToString(symbol.DeclaredAccessibility));
+     }
+ 
+     private static TypeKindInfo MapTypeKind(INamedTypeSymbol symbol)
+diff --git a/Analysis/Models/MethodInfo.cs b/Analysis/Models/MethodInfo.cs
+index 44fe86c..a23461d 100644
+--- a/Analysis/Models/MethodInfo.cs
++++ b/Analysis/Models/MethodInfo.cs
+@@ -11,5 +11,9 @@ public sealed record MethodInfo(
+     TypeId ContainingTypeId,
+     string FilePath,
+     string DisplaySignature,
+-    string? DocComment
++    string? DocComment,
++    string Namespace,
++    string ProjectName,
++    string AccessModifier,
++    int CyclomaticComplexity
+ );
+diff --git a/Analysis/Models/TypeInfo.cs b/Analysis/Models/TypeInfo.cs
+index 0e736f6..df07b94 100644
+--- a/Analysis/Models/TypeInfo.cs
++++ b/Analysis/Models/TypeInfo.cs
+@@ -30,5 +30,7 @@ public sealed record TypeInfo(
+     IReadOnlyList<PropertyFieldInfo> Fields,
+     IReadOnlyList<ConstructorInfo> Constructors,
+     IReadOnlyList<MethodId> MethodIds,
+-    string? DocComment
++    string? DocComment,
++    string ProjectName,
++    string AccessModifier
+ );

@@ -1,0 +1,640 @@
+diff --git a/.planning/STATE.md b/.planning/STATE.md
+index 1922f47..15e5cf3 100644
+--- a/.planning/STATE.md
++++ b/.planning/STATE.md
+@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-02-25)
+ ## Current Position
+ 
+ Phase: 5 of 5 (LLM Enrichment)
+-Plan: 1 of 3 in current phase -- COMPLETE
++Plan: 2 of 3 in current phase -- COMPLETE
+ Status: Executing Phase 05
+-Last activity: 2026-02-26 -- Completed 05-01 (LLM infrastructure foundation)
++Last activity: 2026-02-26 -- Completed 05-02 (Core enrichment engine)
+ 
+-Progress: [##########] 93%
++Progress: [###########] 96%
+ 
+ ## Performance Metrics
+ 
+ **Velocity:**
+-- Total plans completed: 10
+-- Average duration: 7.0 min
+-- Total execution time: 1.17 hours
++- Total plans completed: 11
++- Average duration: 7.2 min
++- Total execution time: 1.32 hours
+ 
+ **By Phase:**
+ 
+@@ -31,11 +31,11 @@ Progress: [##########] 93%
+ | 02 | 2 | 8 min | 4 min |
+ | 03 | 2 | 8 min | 4 min |
+ | 04 | 3 | 39 min | 13 min |
+-| 05 | 1 | 8 min | 8 min |
++| 05 | 2 | 17 min | 8.5 min |
+ 
+ **Recent Trend:**
+-- Last 5 plans: 04-01 (17 min), 04-02 (9 min), 04-03 (13 min), 05-01 (8 min)
+-- Trend: Phase 05 starting efficient with infrastructure-only plan
++- Last 5 plans: 04-02 (9 min), 04-03 (13 min), 05-01 (8 min), 05-02 (9 min)
++- Trend: Phase 05 maintaining efficient pace with focused enrichment plans
+ 
+ ## Accumulated Context
+ 
+@@ -83,6 +83,9 @@ Recent decisions affecting current work:
+ - [05-01]: Anthropic SDK 12.8.0 uses ClientOptions { ApiKey } constructor, not string constructor
+ - [05-01]: Unknown LLM providers fall back to OpenAI-compatible endpoint when config.Endpoint is set
+ - [05-01]: BodySource added as optional last parameter with null default to avoid breaking merger stub construction
++- [05-02]: MEAI UsageDetails.InputTokenCount/OutputTokenCount are long?, cast to int for Interlocked.Add tracking
++- [05-02]: OperationCanceledException propagated (not swallowed) to honor CancellationToken semantics
++- [05-02]: Methods processed before types in enrichment ordering for deterministic behavior
+ 
+ ### Pending Todos
+ 
+@@ -95,5 +98,5 @@ None yet.
+ ## Session Continuity
+ 
+ Last session: 2026-02-26
+-Stopped at: Completed 05-01-PLAN.md
+-Resume file: .planning/phases/05-llm-enrichment/05-02-PLAN.md
++Stopped at: Completed 05-02-PLAN.md
++Resume file: .planning/phases/05-llm-enrichment/05-03-PLAN.md
+diff --git a/.planning/phases/05-llm-enrichment/05-02-SUMMARY.md b/.planning/phases/05-llm-enrichment/05-02-SUMMARY.md
+new file mode 100644
+index 0000000..4e79eb8
+--- /dev/null
++++ b/.planning/phases/05-llm-enrichment/05-02-SUMMARY.md
+@@ -0,0 +1,118 @@
++---
++phase: 05-llm-enrichment
++plan: 02
++subsystem: enrichment
++tags: [llm, ichatclient, meai, prompts, cost-estimation, semaphore, cache, interlocked]
++
++# Dependency graph
++requires:
++  - phase: 05-llm-enrichment
++    plan: 01
++    provides: "IChatClient factory, SummaryCache, ContentHasher, LlmConfig, EnrichedResult dictionaries"
++  - phase: 01-pipeline
++    provides: "IEnricher interface, PipelineProgress, AnalysisResult, MethodInfo, TypeInfo, CallGraph"
++provides:
++  - "LlmEnricher: IEnricher implementation with cache-first lookup, SemaphoreSlim concurrency, per-entity error resilience"
++  - "PromptBuilder: system and user prompt construction for methods and types, optimized for experienced developers"
++  - "CostEstimator: chars/4 token estimation, batch cost calculation, confirmation threshold at 50 entities"
++  - "Token usage tracking via Interlocked (InputTokensUsed, OutputTokensUsed) for live progress reporting"
++affects: [05-03-PLAN]
++
++# Tech tracking
++tech-stack:
++  added: []
++  patterns: [cache-first enrichment, SemaphoreSlim-bounded parallel LLM calls, per-entity error isolation, Interlocked token accumulation]
++
++key-files:
++  created:
++    - Enrichment/LlmEnricher.cs
++    - Enrichment/Prompts/PromptBuilder.cs
++    - Enrichment/CostEstimator.cs
++  modified: []
++
++key-decisions:
++  - "UsageDetails.InputTokenCount/OutputTokenCount are long? in MEAI 10.3.0, cast to int for Interlocked.Add tracking"
++  - "OperationCanceledException propagated (not swallowed) to honor CancellationToken semantics"
++  - "Methods processed before types in enrichment ordering for consistent deterministic behavior"
++
++patterns-established:
++  - "Cache-first enrichment: TryGet before every LLM call, Put after success, zero API calls on second run"
++  - "Per-entity error isolation: try/catch per entity, log warning, increment EntitiesFailed, continue"
++  - "Prompt structure: structured key-value format (Signature, Class, Complexity, Calls, Called by) for LLM context"
++
++requirements-completed: [LLM-01, LLM-03, LLM-05]
++
++# Metrics
++duration: 9min
++completed: 2026-02-26
++---
++
++# Phase 5 Plan 2: Core Enrichment Engine Summary
++
++**LlmEnricher with cache-first IChatClient integration, structured method/type prompts for experienced developers, and chars/4 cost estimation with confirmation threshold**
++
++## Performance
++
++- **Duration:** 9 min
++- **Started:** 2026-02-26T19:06:24Z
++- **Completed:** 2026-02-26T19:15:37Z
++- **Tasks:** 2
++- **Files modified:** 3
++
++## Accomplishments
++- Built PromptBuilder with structured method prompts (signature, doc comment, callees, callers, complexity) and type prompts (kind, inheritance, interfaces, DI dependencies, member counts)
++- Implemented CostEstimator with chars/4 token heuristic, batch cost calculation from per-token pricing, and confirmation threshold at 50 uncached entities
++- Created LlmEnricher implementing IEnricher with cache-first SummaryCache lookup, SemaphoreSlim-bounded parallel LLM calls, per-entity error resilience, and Interlocked token tracking
++
++## Task Commits
++
++Each task was committed atomically:
++
++1. **Task 1: PromptBuilder and CostEstimator** - `cb98041` (feat)
++2. **Task 2: LlmEnricher with cache-first, concurrency, and error resilience** - `7c44318` (feat)
++
++## Files Created/Modified
++- `Enrichment/Prompts/PromptBuilder.cs` - Static class with SystemPrompt, BuildMethodPrompt, BuildTypePrompt, EstimatePromptTokens
++- `Enrichment/CostEstimator.cs` - Static class with EstimateTokens (chars/4), EstimateCost (batch), ShouldConfirm (threshold 50)
++- `Enrichment/LlmEnricher.cs` - Sealed class implementing IEnricher with IChatClient, SummaryCache, SemaphoreSlim, Interlocked tracking
++
++## Decisions Made
++- MEAI 10.3.0 UsageDetails.InputTokenCount/OutputTokenCount are `long?` not `int?` -- cast to int for Interlocked.Add (discovered during build verification)
++- OperationCanceledException is explicitly rethrown (not swallowed by the per-entity catch) to honor CancellationToken contract
++- Methods enriched before types for consistent ordering; both share the same SemaphoreSlim instance
++
++## Deviations from Plan
++
++### Auto-fixed Issues
++
++**1. [Rule 1 - Bug] MEAI token count type mismatch (long? vs int)**
++- **Found during:** Task 2 (LlmEnricher build verification)
++- **Issue:** Plan specified `response.Usage?.InputTokenCount is int inputTokens` but MEAI 10.3.0 UsageDetails uses `long?` not `int?`
++- **Fix:** Changed pattern match to `is long inputTokens` with `(int)inputTokens` cast for Interlocked.Add
++- **Files modified:** Enrichment/LlmEnricher.cs (lines 154, 156, 210, 212)
++- **Verification:** `dotnet build` succeeds with zero errors
++- **Committed in:** 7c44318 (Task 2 commit)
++
++---
++
++**Total deviations:** 1 auto-fixed (1 bug)
++**Impact on plan:** Minor type mismatch in MEAI API surface. No scope creep.
++
++## Issues Encountered
++None.
++
++## User Setup Required
++None - no external service configuration required.
++
++## Next Phase Readiness
++- LlmEnricher is ready to be instantiated with an IChatClient and plugged into the pipeline
++- CLI integration (Plan 03) can wire up config loading, LlmEnricher construction, and --enrich flag
++- All 3 enrichment files compile cleanly with the existing pipeline architecture
++
++## Self-Check: PASSED
++
++All 3 created files verified present. Both task commits (cb98041, 7c44318) verified in git log. Build succeeds with zero errors and zero warnings.
++
++---
++*Phase: 05-llm-enrichment*
++*Completed: 2026-02-26*
+diff --git a/Enrichment/CostEstimator.cs b/Enrichment/CostEstimator.cs
+new file mode 100644
+index 0000000..2eba04a
+--- /dev/null
++++ b/Enrichment/CostEstimator.cs
+@@ -0,0 +1,58 @@
++namespace Code2Obsidian.Enrichment;
++
++/// <summary>
++/// Provides token estimation, cost calculation, and confirmation threshold checking.
++/// Uses the chars/4 heuristic for token estimation per research findings.
++/// </summary>
++public static class CostEstimator
++{
++    /// <summary>
++    /// Default threshold of uncached entities above which the user should be prompted to confirm.
++    /// Below this count, enrichment auto-proceeds.
++    /// </summary>
++    private const int ConfirmationThreshold = 50;
++
++    /// <summary>
++    /// Estimates token count for a text string using the ~1 token per 4 characters heuristic.
++    /// </summary>
++    public static int EstimateTokens(string text)
++    {
++        if (string.IsNullOrEmpty(text))
++            return 0;
++
++        return (int)Math.Ceiling(text.Length / 4.0);
++    }
++
++    /// <summary>
++    /// Estimates total input/output tokens and cost for a batch of uncached entities.
++    /// </summary>
++    /// <param name="uncachedCount">Number of entities requiring LLM calls.</param>
++    /// <param name="avgInputTokensPerPrompt">Average input tokens per prompt (from sampling).</param>
++    /// <param name="maxOutputTokens">Maximum output tokens per response (from config).</param>
++    /// <param name="costPerInputToken">Cost per input token (from config).</param>
++    /// <param name="costPerOutputToken">Cost per output token (from config).</param>
++    /// <returns>Tuple of total input tokens, total output tokens, and estimated cost.</returns>
++    public static (int totalInputTokens, int totalOutputTokens, decimal estimatedCost) EstimateCost(
++        int uncachedCount,
++        int avgInputTokensPerPrompt,
++        int maxOutputTokens,
++        decimal costPerInputToken,
++        decimal costPerOutputToken)
++    {
++        var totalInputTokens = uncachedCount * avgInputTokensPerPrompt;
++        var totalOutputTokens = uncachedCount * maxOutputTokens;
++        var estimatedCost = totalInputTokens * costPerInputToken + totalOutputTokens * costPerOutputToken;
++
++        return (totalInputTokens, totalOutputTokens, estimatedCost);
++    }
++
++    /// <summary>
++    /// Returns true when the number of uncached entities is large enough to warrant
++    /// user confirmation before proceeding with LLM calls.
++    /// Threshold: 50 entities. Below 50 auto-proceeds; at or above 50, prompts.
++    /// </summary>
++    public static bool ShouldConfirm(int uncachedCount)
++    {
++        return uncachedCount >= ConfirmationThreshold;
++    }
++}
+diff --git a/Enrichment/LlmEnricher.cs b/Enrichment/LlmEnricher.cs
+new file mode 100644
+index 0000000..c23e47f
+--- /dev/null
++++ b/Enrichment/LlmEnricher.cs
+@@ -0,0 +1,241 @@
++using Code2Obsidian.Analysis;
++using Code2Obsidian.Analysis.Models;
++using Code2Obsidian.Enrichment.Config;
++using Code2Obsidian.Enrichment.Prompts;
++using Code2Obsidian.Pipeline;
++using Microsoft.Extensions.AI;
++
++namespace Code2Obsidian.Enrichment;
++
++/// <summary>
++/// Core enricher that connects the pipeline to LLM providers via IChatClient.
++/// Implements cache-first lookup, SemaphoreSlim-bounded concurrency, per-entity error resilience,
++/// and Interlocked token tracking for thread-safe accumulation.
++/// </summary>
++public sealed class LlmEnricher : IEnricher
++{
++    private readonly IChatClient _client;
++    private readonly SummaryCache _cache;
++    private readonly LlmConfig _config;
++    private readonly IProgress<PipelineProgress>? _progress;
++
++    private int _inputTokensUsed;
++    private int _outputTokensUsed;
++    private int _entitiesEnriched;
++    private int _entitiesCached;
++    private int _entitiesFailed;
++
++    public LlmEnricher(
++        IChatClient client,
++        SummaryCache cache,
++        LlmConfig config,
++        IProgress<PipelineProgress>? progress = null)
++    {
++        _client = client;
++        _cache = cache;
++        _config = config;
++        _progress = progress;
++    }
++
++    /// <summary>Human-readable name for pipeline progress display.</summary>
++    public string Name => "LLM Enrichment";
++
++    /// <summary>Cumulative input tokens consumed across all LLM calls (thread-safe).</summary>
++    public int InputTokensUsed => Volatile.Read(ref _inputTokensUsed);
++
++    /// <summary>Cumulative output tokens consumed across all LLM calls (thread-safe).</summary>
++    public int OutputTokensUsed => Volatile.Read(ref _outputTokensUsed);
++
++    /// <summary>Count of entities that received LLM-generated summaries.</summary>
++    public int EntitiesEnriched => Volatile.Read(ref _entitiesEnriched);
++
++    /// <summary>Count of entities served from the summary cache (zero API calls).</summary>
++    public int EntitiesCached => Volatile.Read(ref _entitiesCached);
++
++    /// <summary>Count of entities where the LLM call failed (logged and skipped).</summary>
++    public int EntitiesFailed => Volatile.Read(ref _entitiesFailed);
++
++    /// <summary>
++    /// Enriches the analysis result with LLM-generated summaries for methods and types.
++    /// Cache-first: checks SummaryCache before each LLM call. Running twice on unchanged code makes zero API calls.
++    /// </summary>
++    public async Task EnrichAsync(AnalysisResult analysis, EnrichedResult enriched, CancellationToken ct)
++    {
++        using var semaphore = new SemaphoreSlim(_config.MaxConcurrency);
++
++        // Phase 1: Partition methods into cached vs uncached
++        var uncachedMethods = new List<(MethodInfo method, string hash)>();
++        foreach (var (methodId, method) in analysis.Methods)
++        {
++            ct.ThrowIfCancellationRequested();
++            var hash = ContentHasher.ComputeMethodHash(method, analysis.CallGraph);
++            var cached = _cache.TryGet(methodId.Value, hash);
++            if (cached is not null)
++            {
++                enriched.MethodSummaries[methodId.Value] = cached;
++                Interlocked.Increment(ref _entitiesCached);
++            }
++            else
++            {
++                uncachedMethods.Add((method, hash));
++            }
++        }
++
++        // Phase 2: Partition types into cached vs uncached
++        var uncachedTypes = new List<(TypeInfo type, string hash)>();
++        foreach (var (typeId, type) in analysis.Types)
++        {
++            ct.ThrowIfCancellationRequested();
++            var hash = ContentHasher.ComputeTypeHash(type);
++            var cached = _cache.TryGet(typeId.Value, hash);
++            if (cached is not null)
++            {
++                enriched.TypeSummaries[typeId.Value] = cached;
++                Interlocked.Increment(ref _entitiesCached);
++            }
++            else
++            {
++                uncachedTypes.Add((type, hash));
++            }
++        }
++
++        var totalEntities = analysis.Methods.Count + analysis.Types.Count;
++        var uncachedCount = uncachedMethods.Count + uncachedTypes.Count;
++
++        ReportProgress(
++            $"Found {totalEntities} entities: {EntitiesCached} cached, {uncachedCount} to enrich",
++            EntitiesCached, totalEntities);
++
++        // Phase 3: Process uncached methods in parallel with SemaphoreSlim gating
++        var methodTasks = uncachedMethods.Select(item => ProcessMethodAsync(
++            item.method, item.hash, analysis, enriched, semaphore, totalEntities, ct));
++        await Task.WhenAll(methodTasks);
++
++        // Phase 4: Process uncached types in parallel with SemaphoreSlim gating
++        var typeTasks = uncachedTypes.Select(item => ProcessTypeAsync(
++            item.type, item.hash, analysis, enriched, semaphore, totalEntities, ct));
++        await Task.WhenAll(typeTasks);
++
++        // Final progress report
++        ReportProgress(
++            $"Enrichment complete: {EntitiesEnriched} enriched, {EntitiesCached} cached, {EntitiesFailed} failed " +
++            $"({InputTokensUsed} input tokens, {OutputTokensUsed} output tokens)",
++            totalEntities, totalEntities);
++    }
++
++    private async Task ProcessMethodAsync(
++        MethodInfo method, string hash, AnalysisResult analysis,
++        EnrichedResult enriched, SemaphoreSlim semaphore, int totalEntities,
++        CancellationToken ct)
++    {
++        await semaphore.WaitAsync(ct);
++        try
++        {
++            var userPrompt = PromptBuilder.BuildMethodPrompt(method, analysis);
++            var messages = new List<ChatMessage>
++            {
++                new(ChatRole.System, PromptBuilder.SystemPrompt),
++                new(ChatRole.User, userPrompt)
++            };
++
++            var options = new ChatOptions
++            {
++                MaxOutputTokens = _config.MaxOutputTokens,
++                Temperature = 0.3f
++            };
++
++            var response = await _client.GetResponseAsync(messages, options, ct);
++            var summary = response.Text;
++
++            if (string.IsNullOrWhiteSpace(summary))
++                return;
++
++            // Track token usage via Interlocked for thread safety
++            if (response.Usage?.InputTokenCount is long inputTokens)
++                Interlocked.Add(ref _inputTokensUsed, (int)inputTokens);
++            if (response.Usage?.OutputTokenCount is long outputTokens)
++                Interlocked.Add(ref _outputTokensUsed, (int)outputTokens);
++
++            _cache.Put(method.Id.Value, hash, summary, _config.Model);
++            enriched.MethodSummaries[method.Id.Value] = summary;
++            Interlocked.Increment(ref _entitiesEnriched);
++
++            var completed = EntitiesCached + EntitiesEnriched + EntitiesFailed;
++            ReportProgress($"Enriched method: {method.Name}", completed, totalEntities);
++        }
++        catch (OperationCanceledException)
++        {
++            throw; // Propagate cancellation
++        }
++        catch (Exception ex)
++        {
++            // Per Pitfall 5: single entity failure does not abort the run
++            Console.Error.WriteLine($"[LlmEnricher] Warning: Failed to enrich method '{method.Name}': {ex.Message}");
++            Interlocked.Increment(ref _entitiesFailed);
++        }
++        finally
++        {
++            semaphore.Release();
++        }
++    }
++
++    private async Task ProcessTypeAsync(
++        TypeInfo type, string hash, AnalysisResult analysis,
++        EnrichedResult enriched, SemaphoreSlim semaphore, int totalEntities,
++        CancellationToken ct)
++    {
++        await semaphore.WaitAsync(ct);
++        try
++        {
++            var userPrompt = PromptBuilder.BuildTypePrompt(type, analysis);
++            var messages = new List<ChatMessage>
++            {
++                new(ChatRole.System, PromptBuilder.SystemPrompt),
++                new(ChatRole.User, userPrompt)
++            };
++
++            var options = new ChatOptions
++            {
++                MaxOutputTokens = _config.MaxOutputTokens,
++                Temperature = 0.3f
++            };
++
++            var response = await _client.GetResponseAsync(messages, options, ct);
++            var summary = response.Text;
++
++            if (string.IsNullOrWhiteSpace(summary))
++                return;
++
++            // Track token usage
++            if (response.Usage?.InputTokenCount is long inputTokens)
++                Interlocked.Add(ref _inputTokensUsed, (int)inputTokens);
++            if (response.Usage?.OutputTokenCount is long outputTokens)
++                Interlocked.Add(ref _outputTokensUsed, (int)outputTokens);
++
++            _cache.Put(type.Id.Value, hash, summary, _config.Model);
++            enriched.TypeSummaries[type.Id.Value] = summary;
++            Interlocked.Increment(ref _entitiesEnriched);
++
++            var completed = EntitiesCached + EntitiesEnriched + EntitiesFailed;
++            ReportProgress($"Enriched type: {type.Name}", completed, totalEntities);
++        }
++        catch (OperationCanceledException)
++        {
++            throw; // Propagate cancellation
++        }
++        catch (Exception ex)
++        {
++            Console.Error.WriteLine($"[LlmEnricher] Warning: Failed to enrich type '{type.Name}': {ex.Message}");
++            Interlocked.Increment(ref _entitiesFailed);
++        }
++        finally
++        {
++            semaphore.Release();
++        }
++    }
++
++    private void ReportProgress(string description, int current, int total)
++    {
++        _progress?.Report(new PipelineProgress(PipelineStage.Enriching, description, current, total));
++    }
++}
+diff --git a/Enrichment/Prompts/PromptBuilder.cs b/Enrichment/Prompts/PromptBuilder.cs
+new file mode 100644
+index 0000000..5e85232
+--- /dev/null
++++ b/Enrichment/Prompts/PromptBuilder.cs
+@@ -0,0 +1,137 @@
++using Code2Obsidian.Analysis;
++using Code2Obsidian.Analysis.Models;
++
++namespace Code2Obsidian.Enrichment.Prompts;
++
++/// <summary>
++/// Builds system and user prompts for LLM method/type summarization.
++/// Prompts are optimized for experienced developers: concise, technical, no basic concept explanations.
++/// </summary>
++public static class PromptBuilder
++{
++    /// <summary>
++    /// System prompt instructing the LLM to write concise, technical summaries.
++    /// </summary>
++    public static string SystemPrompt { get; } =
++        "You are a code documentation assistant. Write concise, technical summaries for experienced developers. " +
++        "Assume domain knowledge. Reference implementation details. Do not explain basic programming concepts. " +
++        "For simple methods, write a single sentence. For complex methods, write a short paragraph (2-4 sentences). " +
++        "For classes, describe the class's role and primary responsibility, not its member list.";
++
++    /// <summary>
++    /// Builds a user prompt for summarizing a C# method.
++    /// Includes signature, doc comment, complexity, callees, callers, and containing type.
++    /// </summary>
++    public static string BuildMethodPrompt(MethodInfo method, AnalysisResult analysis)
++    {
++        var lines = new List<string>
++        {
++            "Summarize this C# method:",
++            "",
++            $"Signature: {method.DisplaySignature}",
++            $"Class: {method.ContainingTypeName}",
++            $"Complexity: {method.CyclomaticComplexity}"
++        };
++
++        if (!string.IsNullOrWhiteSpace(method.DocComment))
++        {
++            lines.Add($"Doc comment: {method.DocComment}");
++        }
++
++        // Callees (up to 20, sorted)
++        var calleeNames = ResolveMethodNames(
++            analysis.CallGraph.GetCallees(method.Id), analysis, limit: 20);
++        if (calleeNames.Count > 0)
++        {
++            lines.Add($"Calls: {string.Join(", ", calleeNames)}");
++        }
++
++        // Callers (up to 20, sorted)
++        var callerNames = ResolveMethodNames(
++            analysis.CallGraph.GetCallers(method.Id), analysis, limit: 20);
++        if (callerNames.Count > 0)
++        {
++            lines.Add($"Called by: {string.Join(", ", callerNames)}");
++        }
++
++        return string.Join("\n", lines);
++    }
++
++    /// <summary>
++    /// Builds a user prompt for summarizing a C# type (class, interface, record, struct).
++    /// Includes kind, inheritance, interfaces, DI dependencies, and member counts.
++    /// </summary>
++    public static string BuildTypePrompt(TypeInfo type, AnalysisResult analysis)
++    {
++        var kindName = type.Kind switch
++        {
++            TypeKindInfo.Class => "class",
++            TypeKindInfo.Interface => "interface",
++            TypeKindInfo.Record => "record",
++            TypeKindInfo.Struct => "struct",
++            _ => "type"
++        };
++
++        var lines = new List<string>
++        {
++            $"Summarize the role and responsibility of this C# {kindName}:",
++            "",
++            $"Type: {type.FullName}"
++        };
++
++        if (!string.IsNullOrWhiteSpace(type.BaseClassFullName))
++        {
++            lines.Add($"Inherits: {type.BaseClassFullName}");
++        }
++
++        if (type.InterfaceFullNames.Count > 0)
++        {
++            lines.Add($"Implements: {string.Join(", ", type.InterfaceFullNames)}");
++        }
++
++        // DI dependencies: extract parameter type names from all constructors, deduplicated
++        var diDeps = type.Constructors
++            .SelectMany(c => c.Parameters)
++            .Select(p => p.TypeName)
++            .Distinct(StringComparer.Ordinal)
++            .OrderBy(n => n, StringComparer.Ordinal)
++            .ToList();
++
++        if (diDeps.Count > 0)
++        {
++            lines.Add($"Dependencies: {string.Join(", ", diDeps)}");
++        }
++
++        var propFieldCount = type.Properties.Count + type.Fields.Count;
++        lines.Add($"Members: {type.MethodIds.Count} methods, {propFieldCount} properties/fields");
++
++        if (!string.IsNullOrWhiteSpace(type.DocComment))
++        {
++            lines.Add($"Doc comment: {type.DocComment}");
++        }
++
++        return string.Join("\n", lines);
++    }
++
++    /// <summary>
++    /// Estimates the combined token count for a system + user prompt pair using the chars/4 heuristic.
++    /// </summary>
++    public static int EstimatePromptTokens(string systemPrompt, string userPrompt)
++    {
++        return CostEstimator.EstimateTokens(systemPrompt) + CostEstimator.EstimateTokens(userPrompt);
++    }
++
++    /// <summary>
++    /// Resolves a set of MethodIds to human-readable method names.
++    /// Uses the analysis methods dictionary for lookup; falls back to MethodId.Value.
++    /// </summary>
++    private static List<string> ResolveMethodNames(
++        IReadOnlySet<MethodId> methodIds, AnalysisResult analysis, int limit)
++    {
++        return methodIds
++            .Select(id => analysis.Methods.TryGetValue(id, out var m) ? m.Name : id.Value)
++            .OrderBy(name => name, StringComparer.Ordinal)
++            .Take(limit)
++            .ToList();
++    }
++}

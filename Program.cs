@@ -17,8 +17,16 @@ namespace Code2Obsidian;
 
 internal static class Program
 {
+    private static void ConfigureConsole()
+    {
+        Console.OutputEncoding = System.Text.Encoding.UTF8;
+        Console.InputEncoding = System.Text.Encoding.UTF8;
+    }
+
     private static async Task<int> Main(string[] args)
     {
+        ConfigureConsole();
+
         var inputArgument = new Argument<string>("input")
         {
             Description = "Path to a .sln file or directory containing one"
@@ -63,7 +71,7 @@ internal static class Program
 
         var llmProviderOption = new Option<string?>("--llm-provider")
         {
-            Description = "LLM provider (anthropic, openai, ollama, or custom with --llm-endpoint)"
+            Description = "LLM provider (anthropic, openai, ollama, codex, or custom with --llm-endpoint)"
         };
 
         var llmModelOption = new Option<string?>("--llm-model")
@@ -78,7 +86,17 @@ internal static class Program
 
         var llmEndpointOption = new Option<string?>("--llm-endpoint")
         {
-            Description = "LLM endpoint URL (overrides config file, required for custom providers)"
+            Description = "LLM endpoint URL (Codex supports comma/semicolon-separated endpoints for pooling)"
+        };
+
+        var poolSizeOption = new Option<int?>("--pool-size")
+        {
+            Description = "Spawn N local Codex app-server instances (codex provider only)"
+        };
+
+        var traceCodexWsOption = new Option<bool>("--trace-codex-ws")
+        {
+            Description = "Print Codex websocket frame traces (works with pooled endpoints)"
         };
 
         var rootCommand = new RootCommand("Analyze a C# solution and generate an Obsidian vault")
@@ -94,7 +112,9 @@ internal static class Program
             llmProviderOption,
             llmModelOption,
             llmApiKeyOption,
-            llmEndpointOption
+            llmEndpointOption,
+            poolSizeOption,
+            traceCodexWsOption
         };
 
         rootCommand.SetAction(async (parseResult, cancellationToken) =>
@@ -111,9 +131,11 @@ internal static class Program
             var llmModel = parseResult.GetValue(llmModelOption);
             var llmApiKey = parseResult.GetValue(llmApiKeyOption);
             var llmEndpoint = parseResult.GetValue(llmEndpointOption);
+            var poolSize = parseResult.GetValue(poolSizeOption);
+            var traceCodexWs = parseResult.GetValue(traceCodexWsOption);
 
             return await RunPipelineAsync(input, output, fanInThreshold, complexityThreshold,
-                incremental, fullRebuild, dryRun, enrich, llmProvider, llmModel, llmApiKey, llmEndpoint,
+                incremental, fullRebuild, dryRun, enrich, llmProvider, llmModel, llmApiKey, llmEndpoint, poolSize, traceCodexWs,
                 cancellationToken);
         });
 
@@ -124,11 +146,20 @@ internal static class Program
     private static async Task<int> RunPipelineAsync(
         string input, string? output, int fanInThreshold, int complexityThreshold,
         bool incremental, bool fullRebuild, bool dryRun,
-        bool enrich, string? llmProvider, string? llmModel, string? llmApiKey, string? llmEndpoint,
+        bool enrich, string? llmProvider, string? llmModel, string? llmApiKey, string? llmEndpoint, int? poolSize, bool traceCodexWs,
         CancellationToken ct)
     {
+        CodexAppServerPool? codexPool = null;
         try
         {
+            CodexLogBoard.Reset();
+
+            if (poolSize is not null && !enrich)
+            {
+                AnsiConsole.MarkupLine("[red]Error:[/] --pool-size requires --enrich.");
+                return 1;
+            }
+
             // Resolve input path
             var solutionPath = ResolveSolutionPath(input);
 
@@ -164,6 +195,8 @@ internal static class Program
                     // If env var not set, leave as-is; ChatClientFactory will report the error
                 }
 
+                var endpointOverride = ParseEndpointOverride(llmEndpoint);
+
                 // Apply CLI overrides (JSON config for defaults, CLI flags override)
                 if (llmProvider is not null || llmModel is not null || llmApiKey is not null || llmEndpoint is not null)
                 {
@@ -174,7 +207,10 @@ internal static class Program
                             Provider = llmProvider ?? config.Provider,
                             Model = llmModel ?? config.Model,
                             ApiKey = llmApiKey ?? config.ApiKey,
-                            Endpoint = llmEndpoint ?? config.Endpoint
+                            Endpoint = endpointOverride.primaryEndpoint ?? config.Endpoint,
+                            Endpoints = llmEndpoint is null
+                                ? config.Endpoints
+                                : endpointOverride.pooledEndpoints
                         };
                     }
                     else if (llmProvider is not null && llmModel is not null)
@@ -184,7 +220,9 @@ internal static class Program
                             Provider: llmProvider,
                             Model: llmModel,
                             ApiKey: llmApiKey,
-                            Endpoint: llmEndpoint);
+                            Endpoint: endpointOverride.primaryEndpoint,
+                            Endpoints: endpointOverride.pooledEndpoints,
+                            TraceCodexWs: traceCodexWs);
                     }
                 }
 
@@ -198,6 +236,66 @@ internal static class Program
                         AnsiConsole.MarkupLine($"[yellow]Create a config file at:[/] {Markup.Escape(configPath)}");
                         AnsiConsole.MarkupLine("[yellow]Or provide --llm-provider and --llm-model on the command line.[/]");
                         return 1;
+                    }
+                }
+
+                if (traceCodexWs)
+                {
+                    config = config with { TraceCodexWs = true };
+                }
+
+                if (config.Provider.Equals("codex", StringComparison.OrdinalIgnoreCase) && poolSize is null)
+                {
+                    CodexLogBoard.ConfigureInstances(GetConfiguredEndpoints(config));
+                }
+                else if (!config.Provider.Equals("codex", StringComparison.OrdinalIgnoreCase))
+                {
+                    CodexLogBoard.Reset();
+                }
+
+                // Optionally launch a local Codex app-server pool.
+                if (poolSize is not null)
+                {
+                    if (poolSize.Value < 1)
+                    {
+                        AnsiConsole.MarkupLine("[red]Error:[/] --pool-size must be >= 1.");
+                        return 1;
+                    }
+
+                    if (!config.Provider.Equals("codex", StringComparison.OrdinalIgnoreCase))
+                    {
+                        AnsiConsole.MarkupLine("[red]Error:[/] --pool-size can only be used with provider 'codex'.");
+                        return 1;
+                    }
+
+                    var baseEndpoint = ResolveCodexPoolBaseEndpoint(config);
+                    var plannedEndpoints = CodexAppServerPool.PreviewEndpoints(baseEndpoint, poolSize.Value);
+                    CodexLogBoard.ConfigureInstances(plannedEndpoints);
+                    try
+                    {
+                        codexPool = await CodexAppServerPool.StartAsync(poolSize.Value, baseEndpoint, ct);
+                    }
+                    catch (Exception ex)
+                    {
+                        AnsiConsole.MarkupLine($"[red]Codex pool startup failed:[/] {Markup.Escape(ex.Message)}");
+                        return 1;
+                    }
+
+                    var originalConcurrency = config.MaxConcurrency;
+                    var adjustedConcurrency = Math.Max(originalConcurrency, codexPool.Endpoints.Count);
+                    config = config with
+                    {
+                        Endpoint = codexPool.Endpoints[0],
+                        Endpoints = codexPool.Endpoints.ToArray(),
+                        MaxConcurrency = adjustedConcurrency
+                    };
+
+                    AnsiConsole.MarkupLine(
+                        $"[green]Started Codex app-server pool:[/] {codexPool.Endpoints.Count} instances");
+                    if (adjustedConcurrency != originalConcurrency)
+                    {
+                        AnsiConsole.MarkupLine(
+                            $"[yellow]Adjusted maxConcurrency to[/] {adjustedConcurrency} to match pool size.");
                     }
                 }
 
@@ -222,7 +320,15 @@ internal static class Program
                 llmEnricher = new LlmEnricher(client, cache, config, progress: null, confirmEnrichment: null);
                 enrichers.Add(llmEnricher);
 
-                AnsiConsole.MarkupLine($"[green]LLM enrichment enabled:[/] {config.Provider}/{config.Model}");
+                var endpointCount = CountConfiguredEndpoints(config);
+                if (config.Provider.Equals("codex", StringComparison.OrdinalIgnoreCase) && endpointCount > 1)
+                {
+                    AnsiConsole.MarkupLine($"[green]LLM enrichment enabled:[/] {config.Provider}/{config.Model} ([green]{endpointCount} endpoints pooled[/])");
+                }
+                else
+                {
+                    AnsiConsole.MarkupLine($"[green]LLM enrichment enabled:[/] {config.Provider}/{config.Model}");
+                }
                 AnsiConsole.WriteLine();
             }
 
@@ -365,6 +471,11 @@ internal static class Program
             AnsiConsole.MarkupLine($"[red]Fatal error:[/] {Markup.Escape(ex.Message)}");
             return 2;
         }
+        finally
+        {
+            if (codexPool is not null)
+                await codexPool.DisposeAsync();
+        }
     }
 
     /// <summary>
@@ -441,23 +552,75 @@ internal static class Program
         Func<IProgress<PipelineProgress>, Task<PipelineResult>> operation)
     {
         PipelineResult result = null!;
+        var state = new ProgressState();
         var renderLock = new object();
+        var anchorTop = Console.CursorTop;
+        var prevBottom = anchorTop;
 
-        await AnsiConsole.Live(new Text("Starting..."))
-            .AutoClear(false)
-            .StartAsync(async ctx =>
+        void Refresh()
+        {
+            lock (renderLock)
             {
-                var state = new ProgressState();
-                var progress = new Progress<PipelineProgress>(p =>
+                IRenderable display;
+                lock (state) { display = RenderProgressDisplay(state); }
+
+                try
                 {
-                    lock (renderLock)
+                    Console.CursorVisible = false;
+                    var width = Console.WindowWidth;
+
+                    // Blank the entire previous render area first so shorter lines
+                    // don't leave leftover characters from a longer previous frame.
+                    var blank = new string(' ', width);
+                    for (var row = anchorTop; row < prevBottom; row++)
                     {
-                        state.Update(p);
-                        ctx.UpdateTarget(RenderProgressDisplay(state));
+                        Console.SetCursorPosition(0, row);
+                        Console.Write(blank);
                     }
-                });
-                result = await operation(progress);
-            });
+
+                    Console.SetCursorPosition(0, anchorTop);
+                    AnsiConsole.Write(display);
+                    AnsiConsole.WriteLine();
+
+                    prevBottom = Math.Max(Console.CursorTop, prevBottom);
+                }
+                catch (IOException)
+                {
+                    // Console not available (redirected output, etc.) — skip render.
+                }
+                finally
+                {
+                    try { Console.CursorVisible = true; } catch { /* best-effort */ }
+                }
+            }
+        }
+
+        var progress = new Progress<PipelineProgress>(p =>
+        {
+            lock (state) { state.Update(p); }
+            Refresh();
+        });
+
+        // Periodic refresh picks up CodexLogBoard changes without subscriptions
+        using var refreshTimer = new Timer(_ => Refresh(), null, 250, 250);
+
+        try
+        {
+            result = await operation(progress);
+        }
+        finally
+        {
+            refreshTimer.Change(Timeout.Infinite, Timeout.Infinite);
+            lock (renderLock)
+            {
+                try
+                {
+                    Console.SetCursorPosition(0, prevBottom);
+                    Console.CursorVisible = true;
+                }
+                catch { /* best-effort */ }
+            }
+        }
 
         return result;
     }
@@ -503,9 +666,15 @@ internal static class Program
         }
     }
 
+
     private static IRenderable RenderProgressDisplay(ProgressState state)
     {
         const int barWidth = 40;
+        const int timestampWidth = 8;
+        const int minEndpointWidth = 19;
+        const int maxEndpointWidth = 28;
+        const int minMessageWidth = 24;
+        const int maxMessageWidth = 140;
         var rows = new List<IRenderable>();
 
         for (var i = 0; i < state.Stages.Length; i++)
@@ -530,10 +699,47 @@ internal static class Program
             rows.Add(new Text(""));
         }
 
+        var codexEntries = CodexLogBoard.Snapshot();
+        if (codexEntries.Count > 0)
+        {
+            rows.Add(new Rule());
+            var displayWidth = Math.Max(80, AnsiConsole.Profile.Width);
+            var endpointWidth = Math.Clamp(
+                codexEntries.Max(e => e.Endpoint.Length),
+                minEndpointWidth,
+                maxEndpointWidth);
+            var messageWidth = Math.Clamp(
+                displayWidth - endpointWidth - timestampWidth - 9, // left indent + spaces
+                minMessageWidth,
+                maxMessageWidth);
+
+            foreach (var entry in codexEntries)
+            {
+                var timestamp = entry.Timestamp == DateTimeOffset.MinValue
+                    ? "--:--:--"
+                    : entry.Timestamp.ToLocalTime().ToString("HH:mm:ss");
+                var endpoint = TruncateForDisplay(entry.Endpoint, endpointWidth).PadRight(endpointWidth);
+                var message = TruncateForDisplay(entry.Message, messageWidth);
+                rows.Add(new Markup(
+                    $"  [grey]{Markup.Escape(endpoint)}[/] [blue]{timestamp}[/] {Markup.Escape(message)}"));
+            }
+        }
+
         if (rows.Count == 0)
             return new Text("Starting...");
 
         return new Rows(rows);
+    }
+
+    private static string TruncateForDisplay(string value, int maxChars)
+    {
+        if (maxChars <= 1)
+            return "…";
+
+        if (value.Length <= maxChars)
+            return value;
+
+        return value[..(maxChars - 1)] + "…";
     }
 
     #endregion
@@ -580,6 +786,64 @@ internal static class Program
 
         var solutionDir = Path.GetDirectoryName(solutionPath)!;
         return Path.Combine(solutionDir, "vault");
+    }
+
+    private static (string? primaryEndpoint, string[]? pooledEndpoints) ParseEndpointOverride(string? rawEndpointInput)
+    {
+        if (string.IsNullOrWhiteSpace(rawEndpointInput))
+            return (null, null);
+
+        var split = rawEndpointInput
+            .Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (split.Length == 0)
+            return (null, null);
+
+        if (split.Length == 1)
+            return (split[0], null);
+
+        return (split[0], split);
+    }
+
+    private static string ResolveCodexPoolBaseEndpoint(LlmConfig config)
+    {
+        if (!string.IsNullOrWhiteSpace(config.Endpoint))
+            return config.Endpoint;
+
+        if (config.Endpoints is { Length: > 0 })
+        {
+            var first = config.Endpoints.FirstOrDefault(e => !string.IsNullOrWhiteSpace(e));
+            if (!string.IsNullOrWhiteSpace(first))
+                return first;
+        }
+
+        return "ws://127.0.0.1:8080";
+    }
+
+    private static IReadOnlyList<string> GetConfiguredEndpoints(LlmConfig config)
+    {
+        var endpoints = new List<string>();
+        if (config.Endpoints is { Length: > 0 })
+        {
+            endpoints.AddRange(config.Endpoints.Where(e => !string.IsNullOrWhiteSpace(e)).Select(e => e.Trim()));
+        }
+        if (!string.IsNullOrWhiteSpace(config.Endpoint))
+            endpoints.Add(config.Endpoint.Trim());
+
+        if (endpoints.Count == 0)
+            endpoints.Add("ws://127.0.0.1:8080");
+
+        return endpoints
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static int CountConfiguredEndpoints(LlmConfig config)
+    {
+        return GetConfiguredEndpoints(config).Count;
     }
 
     /// <summary>

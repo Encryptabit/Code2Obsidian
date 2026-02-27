@@ -14,9 +14,41 @@ namespace Code2Obsidian.Enrichment.Config;
 public sealed class CodexChatClient : IChatClient, IDisposable
 {
     private static readonly TimeSpan TurnTimeout = TimeSpan.FromMinutes(3);
+    private static readonly int TraceMaxChars = ReadPositiveIntEnv("CODEX_TRACE_WS_MAX_CHARS", 220);
+    private static readonly bool TraceShowAll =
+        string.Equals(Environment.GetEnvironmentVariable("CODEX_TRACE_WS_SHOW_ALL"), "1", StringComparison.Ordinal);
+    private static readonly HashSet<string> TraceImportantMethods = new(StringComparer.Ordinal)
+    {
+        "initialize",
+        "initialized",
+        "thread/start",
+        "turn/start",
+        "turn/started",
+        "turn/completed",
+        "turn/failed",
+        "item/agentMessage/delta",
+        "thread/tokenUsage/updated",
+        "item/commandExecution/requestApproval",
+        "item/fileChange/requestApproval",
+        "codex/event/agent_reasoning",
+        "codex/event/agent_message",
+        "codex/event/task_started",
+        "codex/event/task_complete",
+        "codex/event/task_error",
+        "codex/event/exec_command_begin",
+        "codex/event/exec_command_end",
+        "codex/event/exec_output"
+    };
+    private static readonly HashSet<string> TraceImportantItemTypes = new(StringComparer.Ordinal)
+    {
+        "reasoning",
+        "agentMessage",
+        "commandExecution"
+    };
 
     private readonly Uri _endpoint;
     private readonly string _model;
+    private readonly bool _traceWs;
     private readonly SemaphoreSlim _turnLock = new(1, 1);
 
     private ClientWebSocket? _ws;
@@ -24,10 +56,11 @@ public sealed class CodexChatClient : IChatClient, IDisposable
     private bool _disposed;
     private bool _initialized;
 
-    public CodexChatClient(Uri endpoint, string model)
+    public CodexChatClient(Uri endpoint, string model, bool traceWs = false)
     {
         _endpoint = endpoint;
         _model = model;
+        _traceWs = traceWs;
     }
 
     public ChatClientMetadata Metadata => new("codex", _endpoint, _model);
@@ -326,6 +359,8 @@ public sealed class CodexChatClient : IChatClient, IDisposable
         var json = message.ToJsonString(new JsonSerializerOptions { WriteIndented = false });
         var bytes = Encoding.UTF8.GetBytes(json);
         await _ws!.SendAsync(bytes, WebSocketMessageType.Text, endOfMessage: true, ct);
+        if (_traceWs)
+            TraceFrame("C->S", bytes.Length, message, json);
     }
 
     private async Task<JsonObject?> ReceiveAsync(CancellationToken ct)
@@ -343,8 +378,12 @@ public sealed class CodexChatClient : IChatClient, IDisposable
         }
         while (!result.EndOfMessage);
 
-        ms.Position = 0;
-        return JsonSerializer.Deserialize<JsonObject>(ms);
+        var sizeBytes = (int)ms.Length;
+        var json = Encoding.UTF8.GetString(ms.GetBuffer(), 0, sizeBytes);
+        var payload = JsonSerializer.Deserialize<JsonObject>(json);
+        if (_traceWs)
+            TraceFrame("S->C", sizeBytes, payload, json);
+        return payload;
     }
 
     private static JsonArray BuildInputArray(IEnumerable<ChatMessage> messages)
@@ -371,5 +410,150 @@ public sealed class CodexChatClient : IChatClient, IDisposable
                 ["text"] = sb.ToString().TrimEnd()
             }
         };
+    }
+
+    private void TraceFrame(string direction, int sizeBytes, JsonObject? payload, string raw)
+    {
+        if (!ShouldTraceFrame(payload, raw))
+            return;
+
+        var summary = SummarizeFrame(payload, raw);
+        CodexLogBoard.Report(_endpoint.ToString(), $"{direction} {sizeBytes}b {TruncateForTrace(summary)}");
+    }
+
+    private static bool ShouldTraceFrame(JsonObject? payload, string raw)
+    {
+        if (TraceShowAll)
+            return true;
+
+        if (payload is null)
+            return raw.Contains("error", StringComparison.OrdinalIgnoreCase);
+
+        if (payload["error"] is not null)
+            return true;
+
+        var method = payload["method"]?.GetValue<string>();
+        if (!string.IsNullOrWhiteSpace(method) && TraceImportantMethods.Contains(method))
+            return true;
+
+        if (method is "item/started" or "item/completed")
+        {
+            var itemType = payload["params"]?["item"]?["type"]?.GetValue<string>();
+            return itemType is not null && TraceImportantItemTypes.Contains(itemType);
+        }
+
+        return false;
+    }
+
+    private static string SummarizeFrame(JsonObject? payload, string raw)
+    {
+        if (payload is null)
+            return raw;
+
+        var method = payload["method"]?.GetValue<string>() ?? "";
+        var parameters = payload["params"];
+
+        if (method == "item/agentMessage/delta")
+        {
+            var delta = parameters?["delta"]?.GetValue<string>() ?? "";
+            return $"{method}: {delta}";
+        }
+
+        if (method == "codex/event/agent_reasoning")
+        {
+            var text = parameters?["msg"]?["text"]?.GetValue<string>() ?? "";
+            return $"{method}: {text}";
+        }
+
+        if (method == "codex/event/agent_message")
+        {
+            var phase = parameters?["msg"]?["phase"]?.GetValue<string>() ?? "";
+            var message = parameters?["msg"]?["message"]?.GetValue<string>() ?? "";
+            return $"{method}[{phase}]: {message}";
+        }
+
+        if (method == "codex/event/task_started")
+        {
+            var turnId = parameters?["msg"]?["turn_id"]?.GetValue<string>() ?? "";
+            return $"{method}: turn_id={turnId}";
+        }
+
+        if (method == "codex/event/task_complete")
+        {
+            var turnId = parameters?["msg"]?["turn_id"]?.GetValue<string>() ?? "";
+            return $"{method}: turn_id={turnId}";
+        }
+
+        if (method == "codex/event/task_error")
+        {
+            var msg = parameters?["msg"]?.ToJsonString() ?? "";
+            return $"{method}: {msg}";
+        }
+
+        if (method == "thread/tokenUsage/updated")
+        {
+            var inputTokens = parameters?["inputTokens"]?.GetValue<long?>() ?? 0;
+            var outputTokens = parameters?["outputTokens"]?.GetValue<long?>() ?? 0;
+            return $"{method}: inputTokens={inputTokens}, outputTokens={outputTokens}";
+        }
+
+        if (method is "item/started" or "item/completed")
+        {
+            var item = parameters?["item"];
+            var itemType = item?["type"]?.GetValue<string>() ?? "?";
+            if (itemType == "reasoning")
+            {
+                var summary = item?["summary"]?.ToJsonString() ?? "[]";
+                return $"{method}[reasoning]: {summary}";
+            }
+
+            if (itemType == "agentMessage")
+            {
+                var phase = item?["phase"]?.GetValue<string>() ?? "";
+                var text = item?["text"]?.GetValue<string>() ?? "";
+                return $"{method}[agentMessage:{phase}]: {text}";
+            }
+
+            if (itemType == "commandExecution")
+            {
+                var status = item?["status"]?.GetValue<string>() ?? "";
+                var command = item?["command"]?.GetValue<string>() ?? "";
+                return $"{method}[commandExecution:{status}]: {command}";
+            }
+
+            return $"{method}[{itemType}]";
+        }
+
+        if (method is "item/commandExecution/requestApproval" or "item/fileChange/requestApproval")
+        {
+            var id = payload["id"]?.ToJsonString() ?? "null";
+            return $"{method}: id={id}";
+        }
+
+        if (!string.IsNullOrWhiteSpace(method))
+            return $"{method}: {raw}";
+
+        if (payload["id"] is not null && payload["error"] is not null)
+            return $"rpc/error id={payload["id"]}: {payload["error"]}";
+
+        if (payload["id"] is not null && payload["result"] is not null)
+            return $"rpc/result id={payload["id"]}: {payload["result"]}";
+
+        return raw;
+    }
+
+    private static string TruncateForTrace(string text)
+    {
+        var oneLine = text.Replace("\r", "\\r", StringComparison.Ordinal)
+            .Replace("\n", "\\n", StringComparison.Ordinal);
+        if (oneLine.Length <= TraceMaxChars)
+            return oneLine;
+        return oneLine[..TraceMaxChars] + "...(truncated)";
+    }
+
+    private static int ReadPositiveIntEnv(string name, int fallback)
+    {
+        var raw = Environment.GetEnvironmentVariable(name);
+        return int.TryParse(raw, out var parsed) && parsed > 0 ? parsed : fallback;
     }
 }
