@@ -17,6 +17,9 @@ namespace Code2Obsidian.Enrichment;
 /// </summary>
 public sealed class LlmEnricher : IEnricher
 {
+    private const int ProgressEntityStride = 10;
+    private const long ProgressMinIntervalTicks = TimeSpan.TicksPerSecond;
+
     private readonly IChatClient _client;
     private readonly SummaryCache _cache;
     private readonly LlmConfig _config;
@@ -29,6 +32,8 @@ public sealed class LlmEnricher : IEnricher
     private int _entitiesEnriched;
     private int _entitiesCached;
     private int _entitiesFailed;
+    private int _lastReportedCompleted = -1;
+    private long _lastProgressTicks;
 
     public LlmEnricher(
         IChatClient client,
@@ -153,7 +158,7 @@ public sealed class LlmEnricher : IEnricher
 
             if (!_confirmEnrichment(uncachedCount, estInputTokens, estOutputTokens, estCost))
             {
-                ReportProgress("Enrichment skipped by user", EntitiesCached, totalEntities);
+                ReportProgress("Enrichment skipped by user", EntitiesCached, totalEntities, force: true);
                 return;
             }
         }
@@ -172,7 +177,7 @@ public sealed class LlmEnricher : IEnricher
         ReportProgress(
             $"Enrichment complete: {EntitiesEnriched} enriched, {EntitiesCached} cached, {EntitiesFailed} failed " +
             $"({InputTokensUsed} input tokens, {OutputTokensUsed} output tokens)",
-            totalEntities, totalEntities);
+            totalEntities, totalEntities, force: true);
     }
 
     private async Task ProcessMethodAsync(
@@ -209,15 +214,14 @@ public sealed class LlmEnricher : IEnricher
             if (enrichmentResponse is null)
             {
                 Interlocked.Increment(ref _entitiesFailed);
+                ReportEntityProgress($"Failed method: {method.Name}", totalEntities);
                 return;
             }
 
             _cache.Put(method.Id.Value, hash, enrichmentResponse, _config.Model);
             enriched.MethodSummaries[method.Id.Value] = enrichmentResponse;
             Interlocked.Increment(ref _entitiesEnriched);
-
-            var completed = EntitiesCached + EntitiesEnriched + EntitiesFailed;
-            ReportProgress($"Enriched method: {method.Name}", completed, totalEntities);
+            ReportEntityProgress($"Enriched method: {method.Name}", totalEntities);
         }
         catch (OperationCanceledException)
         {
@@ -228,6 +232,7 @@ public sealed class LlmEnricher : IEnricher
             // Per Pitfall 5: single entity failure does not abort the run
             Console.Error.WriteLine($"[LlmEnricher] Warning: Failed to enrich method '{method.Name}': {ex.Message}");
             Interlocked.Increment(ref _entitiesFailed);
+            ReportEntityProgress($"Failed method: {method.Name}", totalEntities);
         }
         finally
         {
@@ -269,15 +274,14 @@ public sealed class LlmEnricher : IEnricher
             if (enrichmentResponse is null)
             {
                 Interlocked.Increment(ref _entitiesFailed);
+                ReportEntityProgress($"Failed type: {type.Name}", totalEntities);
                 return;
             }
 
             _cache.Put(type.Id.Value, hash, enrichmentResponse, _config.Model);
             enriched.TypeSummaries[type.Id.Value] = enrichmentResponse;
             Interlocked.Increment(ref _entitiesEnriched);
-
-            var completed = EntitiesCached + EntitiesEnriched + EntitiesFailed;
-            ReportProgress($"Enriched type: {type.Name}", completed, totalEntities);
+            ReportEntityProgress($"Enriched type: {type.Name}", totalEntities);
         }
         catch (OperationCanceledException)
         {
@@ -287,6 +291,7 @@ public sealed class LlmEnricher : IEnricher
         {
             Console.Error.WriteLine($"[LlmEnricher] Warning: Failed to enrich type '{type.Name}': {ex.Message}");
             Interlocked.Increment(ref _entitiesFailed);
+            ReportEntityProgress($"Failed type: {type.Name}", totalEntities);
         }
         finally
         {
@@ -355,8 +360,36 @@ public sealed class LlmEnricher : IEnricher
             tags);
     }
 
-    private void ReportProgress(string description, int current, int total)
+    private void ReportEntityProgress(string description, int total)
     {
+        var completed = EntitiesCached + EntitiesEnriched + EntitiesFailed;
+        ReportProgress(description, completed, total);
+    }
+
+    private void ReportProgress(string description, int current, int total, bool force = false)
+    {
+        if (!force && current < total)
+        {
+            var lastCompleted = Volatile.Read(ref _lastReportedCompleted);
+            var lastTicks = Volatile.Read(ref _lastProgressTicks);
+            var nowTicks = DateTime.UtcNow.Ticks;
+
+            var strideMet = current - lastCompleted >= ProgressEntityStride;
+            var intervalMet = nowTicks - lastTicks >= ProgressMinIntervalTicks;
+            if (!strideMet && !intervalMet)
+                return;
+
+            if (Interlocked.CompareExchange(ref _lastReportedCompleted, current, lastCompleted) != lastCompleted)
+                return;
+
+            Interlocked.Exchange(ref _lastProgressTicks, nowTicks);
+        }
+        else
+        {
+            Interlocked.Exchange(ref _lastReportedCompleted, current);
+            Interlocked.Exchange(ref _lastProgressTicks, DateTime.UtcNow.Ticks);
+        }
+
         _progress?.Report(new PipelineProgress(PipelineStage.Enriching, description, current, total));
     }
 }

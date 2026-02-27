@@ -8,20 +8,21 @@ namespace Code2Obsidian.Enrichment.Config;
 
 /// <summary>
 /// IChatClient implementation that speaks the Codex JSON-RPC-over-WebSocket protocol.
-/// Lazily connects on first call, maintains a single thread for all turns, and
-/// auto-declines approval requests (we only want text responses).
+/// Maintains one websocket session but starts a fresh Codex thread per turn to keep
+/// context bounded, and auto-declines approval requests (we only want text responses).
 /// </summary>
 public sealed class CodexChatClient : IChatClient, IDisposable
 {
+    private static readonly TimeSpan TurnTimeout = TimeSpan.FromMinutes(3);
+
     private readonly Uri _endpoint;
     private readonly string _model;
     private readonly SemaphoreSlim _turnLock = new(1, 1);
 
     private ClientWebSocket? _ws;
-    private string? _threadId;
     private int _nextId = 1;
     private bool _disposed;
-    private bool _handshakeFailed;
+    private bool _initialized;
 
     public CodexChatClient(Uri endpoint, string model)
     {
@@ -39,12 +40,80 @@ public sealed class CodexChatClient : IChatClient, IDisposable
         await _turnLock.WaitAsync(cancellationToken);
         try
         {
-            await EnsureConnectedAsync(cancellationToken);
+            Exception? lastFailure = null;
+            for (var attempt = 1; attempt <= 2; attempt++)
+            {
+                try
+                {
+                    return await GetResponseInternalAsync(chatMessages, cancellationToken);
+                }
+                catch (TimeoutException ex) when (attempt < 2)
+                {
+                    lastFailure = ex;
+                    ResetConnection();
+                }
+                catch (WebSocketException ex) when (attempt < 2)
+                {
+                    lastFailure = ex;
+                    ResetConnection();
+                }
+                catch (InvalidOperationException ex) when (attempt < 2)
+                {
+                    lastFailure = ex;
+                    ResetConnection();
+                }
+            }
+
+            throw lastFailure ?? new InvalidOperationException("Codex turn failed after retry.");
+        }
+        finally
+        {
+            _turnLock.Release();
+        }
+    }
+
+    public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+        IEnumerable<ChatMessage> chatMessages,
+        ChatOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        throw new NotSupportedException("Streaming not supported by CodexChatClient. Use GetResponseAsync.");
+    }
+
+    public object? GetService(Type serviceType, object? serviceKey = null)
+    {
+        if (serviceType == typeof(CodexChatClient))
+            return this;
+        return null;
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        ResetConnection();
+        _turnLock.Dispose();
+    }
+
+    // ---- Private protocol helpers ----
+
+    private async Task<ChatResponse> GetResponseInternalAsync(
+        IEnumerable<ChatMessage> chatMessages,
+        CancellationToken cancellationToken)
+    {
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(TurnTimeout);
+        var turnToken = timeoutCts.Token;
+
+        try
+        {
+            await EnsureConnectedAsync(turnToken);
 
             // Build input as array of content objects per Codex protocol
             var inputArray = BuildInputArray(chatMessages);
+            var threadId = await StartThreadAsync(turnToken);
 
-            // Send turn/start (model is set at thread level, not per-turn)
+            // Send turn/start (thread is fresh for this request)
             var turnId = NextId();
             await SendAsync(new JsonObject
             {
@@ -52,10 +121,10 @@ public sealed class CodexChatClient : IChatClient, IDisposable
                 ["method"] = "turn/start",
                 ["params"] = new JsonObject
                 {
-                    ["threadId"] = _threadId,
+                    ["threadId"] = threadId,
                     ["input"] = inputArray
                 }
-            }, cancellationToken);
+            }, turnToken);
 
             // Collect response
             var textBuilder = new StringBuilder();
@@ -65,7 +134,7 @@ public sealed class CodexChatClient : IChatClient, IDisposable
 
             while (!turnCompleted)
             {
-                var msg = await ReceiveAsync(cancellationToken);
+                var msg = await ReceiveAsync(turnToken);
                 if (msg is null)
                     throw new InvalidOperationException("WebSocket closed before turn/completed.");
 
@@ -110,7 +179,7 @@ public sealed class CodexChatClient : IChatClient, IDisposable
                                     ["approved"] = false,
                                     ["reason"] = "Code2Obsidian enrichment - text only"
                                 }
-                            }, cancellationToken);
+                            }, turnToken);
                         }
                         break;
 
@@ -137,49 +206,19 @@ public sealed class CodexChatClient : IChatClient, IDisposable
 
             return response;
         }
-        finally
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            _turnLock.Release();
+            throw new TimeoutException($"Codex turn timed out after {TurnTimeout.TotalMinutes:0} minutes.");
         }
     }
 
-    public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
-        IEnumerable<ChatMessage> chatMessages,
-        ChatOptions? options = null,
-        CancellationToken cancellationToken = default)
-    {
-        throw new NotSupportedException("Streaming not supported by CodexChatClient. Use GetResponseAsync.");
-    }
-
-    public object? GetService(Type serviceType, object? serviceKey = null)
-    {
-        if (serviceType == typeof(CodexChatClient))
-            return this;
-        return null;
-    }
-
-    public void Dispose()
-    {
-        if (_disposed) return;
-        _disposed = true;
-        _ws?.Dispose();
-        _turnLock.Dispose();
-    }
-
-    // ---- Private protocol helpers ----
-
     private async Task EnsureConnectedAsync(CancellationToken ct)
     {
-        if (_ws is { State: WebSocketState.Open } && _threadId is not null)
+        if (_ws is { State: WebSocketState.Open } && _initialized)
             return;
 
-        // Circuit breaker: if handshake already failed, don't retry every entity
-        if (_handshakeFailed)
-            throw new InvalidOperationException("Codex handshake previously failed. Restart to retry.");
-
-        // Close any previous connection that failed mid-handshake
-        _ws?.Dispose();
-        _threadId = null;
+        // Close any previous failed connection before reconnect
+        ResetConnection();
         _ws = new ClientWebSocket();
         await _ws.ConnectAsync(_endpoint, ct);
 
@@ -209,35 +248,33 @@ public sealed class CodexChatClient : IChatClient, IDisposable
             {
                 ["method"] = "initialized"
             }, ct);
-
-            // 3. Start a thread with model and approval policy
-            var threadStartId = NextId();
-            await SendAsync(new JsonObject
-            {
-                ["id"] = threadStartId,
-                ["method"] = "thread/start",
-                ["params"] = new JsonObject
-                {
-                    ["model"] = _model,
-                    ["approvalPolicy"] = "never"
-                }
-            }, ct);
-
-            var threadResponse = await WaitForResponseAsync(threadStartId, ct);
-
-            // Thread ID is at result.thread.id per Codex protocol
-            _threadId = threadResponse?["result"]?["thread"]?["id"]?.GetValue<string>()
-                        ?? throw new InvalidOperationException(
-                            "Codex did not return a thread id in result.thread.id.");
+            _initialized = true;
         }
         catch
         {
-            _ws?.Dispose();
-            _ws = null;
-            _threadId = null;
-            _handshakeFailed = true;
+            ResetConnection();
             throw;
         }
+    }
+
+    private async Task<string> StartThreadAsync(CancellationToken ct)
+    {
+        var threadStartId = NextId();
+        await SendAsync(new JsonObject
+        {
+            ["id"] = threadStartId,
+            ["method"] = "thread/start",
+            ["params"] = new JsonObject
+            {
+                ["model"] = _model,
+                ["approvalPolicy"] = "never"
+            }
+        }, ct);
+
+        var threadResponse = await WaitForResponseAsync(threadStartId, ct);
+        return threadResponse?["result"]?["thread"]?["id"]?.GetValue<string>()
+               ?? throw new InvalidOperationException(
+                   "Codex did not return a thread id in result.thread.id.");
     }
 
     private async Task<JsonObject?> WaitForResponseAsync(int expectedId, CancellationToken ct)
@@ -264,6 +301,22 @@ public sealed class CodexChatClient : IChatClient, IDisposable
 
             // Discard notifications during handshake
         }
+    }
+
+    private void ResetConnection()
+    {
+        try
+        {
+            _ws?.Abort();
+        }
+        catch
+        {
+            // best-effort shutdown
+        }
+
+        _ws?.Dispose();
+        _ws = null;
+        _initialized = false;
     }
 
     private int NextId() => Interlocked.Increment(ref _nextId);
