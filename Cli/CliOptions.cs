@@ -14,6 +14,7 @@ namespace Code2Obsidian.Cli;
 /// LlmModel overrides the LLM model name from the config file.
 /// LlmApiKey overrides the LLM API key from the config file (or $ENV_VAR reference).
 /// LlmEndpoint overrides the LLM endpoint URL from the config file.
+/// CodexWslDistro selects the WSL distro to launch Codex app-server instances in (Windows only).
 /// PoolSize spawns that many local Codex app-server instances (codex provider only).
 /// TraceCodexWs enables Codex websocket frame tracing to stderr.
 /// </summary>
@@ -30,5 +31,6 @@ public sealed record CliOptions(
     string? LlmModel = null,
     string? LlmApiKey = null,
     string? LlmEndpoint = null,
+    string? CodexWslDistro = null,
     int? PoolSize = null,
     bool TraceCodexWs = false);

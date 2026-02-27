@@ -12,11 +12,18 @@ namespace Code2Obsidian.Loading;
 public sealed class SolutionLoader
 {
     private readonly List<string> _diagnostics = new();
+    private readonly HashSet<string> _seenDiagnostics = new(StringComparer.Ordinal);
+    private int _suppressedPackageDiagnosticCount;
 
     /// <summary>
     /// Workspace diagnostics collected during solution loading.
     /// </summary>
     public IReadOnlyList<string> Diagnostics => _diagnostics;
+
+    /// <summary>
+    /// Count of noisy package diagnostics suppressed from WorkspaceFailed output.
+    /// </summary>
+    public int SuppressedPackageDiagnosticCount => _suppressedPackageDiagnosticCount;
 
     /// <summary>
     /// Loads a solution from the given path and returns an AnalysisContext.
@@ -30,7 +37,16 @@ public sealed class SolutionLoader
         var workspace = MSBuildWorkspace.Create();
         workspace.WorkspaceFailed += (_, e) =>
         {
-            _diagnostics.Add(e.Diagnostic.Message);
+            var normalized = NormalizeDiagnosticMessage(e.Diagnostic.Message);
+
+            if (ShouldSuppressPackageDiagnostic(normalized))
+            {
+                _suppressedPackageDiagnosticCount++;
+                return;
+            }
+
+            if (_seenDiagnostics.Add(normalized))
+                _diagnostics.Add(normalized);
         };
 
         var solution = await workspace.OpenSolutionAsync(solutionPath, cancellationToken: ct);
@@ -102,5 +118,46 @@ public sealed class SolutionLoader
         }
 
         return names;
+    }
+
+    private static string NormalizeDiagnosticMessage(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+            return "MSBuild reported an empty diagnostic.";
+
+        var singleLine = string.Join(
+            " ",
+            message.Split(['\r', '\n', '\t'], StringSplitOptions.RemoveEmptyEntries));
+
+        const string prefix = "Msbuild failed when processing the file '";
+        const string middle = "' with message: ";
+
+        if (singleLine.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            var fileStart = prefix.Length;
+            var fileEnd = singleLine.IndexOf('\'', fileStart);
+            if (fileEnd > fileStart)
+            {
+                var middleStart = singleLine.IndexOf(middle, fileEnd + 1, StringComparison.OrdinalIgnoreCase);
+                if (middleStart > fileEnd)
+                {
+                    var projectPath = singleLine[fileStart..fileEnd];
+                    var details = singleLine[(middleStart + middle.Length)..];
+                    return $"MSBuild warning in '{projectPath}': {details}";
+                }
+            }
+        }
+
+        return singleLine;
+    }
+
+    private static bool ShouldSuppressPackageDiagnostic(string message)
+    {
+        return message.Contains("Detected package version outside of dependency constraint", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("was restored using '.NETFramework,Version", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("has a known critical severity vulnerability", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("has a known high severity vulnerability", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("has a known moderate severity vulnerability", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("has a known low severity vulnerability", StringComparison.OrdinalIgnoreCase);
     }
 }

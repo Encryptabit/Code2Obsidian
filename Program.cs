@@ -89,6 +89,11 @@ internal static class Program
             Description = "LLM endpoint URL (Codex supports comma/semicolon-separated endpoints for pooling)"
         };
 
+        var codexWslDistroOption = new Option<string?>("--codex-wsl-distro")
+        {
+            Description = "WSL distro to launch Codex app-server pool in (Windows only)"
+        };
+
         var poolSizeOption = new Option<int?>("--pool-size")
         {
             Description = "Spawn N local Codex app-server instances (codex provider only)"
@@ -113,6 +118,7 @@ internal static class Program
             llmModelOption,
             llmApiKeyOption,
             llmEndpointOption,
+            codexWslDistroOption,
             poolSizeOption,
             traceCodexWsOption
         };
@@ -131,11 +137,13 @@ internal static class Program
             var llmModel = parseResult.GetValue(llmModelOption);
             var llmApiKey = parseResult.GetValue(llmApiKeyOption);
             var llmEndpoint = parseResult.GetValue(llmEndpointOption);
+            var codexWslDistro = parseResult.GetValue(codexWslDistroOption);
             var poolSize = parseResult.GetValue(poolSizeOption);
             var traceCodexWs = parseResult.GetValue(traceCodexWsOption);
 
             return await RunPipelineAsync(input, output, fanInThreshold, complexityThreshold,
-                incremental, fullRebuild, dryRun, enrich, llmProvider, llmModel, llmApiKey, llmEndpoint, poolSize, traceCodexWs,
+                incremental, fullRebuild, dryRun, enrich, llmProvider, llmModel, llmApiKey, llmEndpoint,
+                codexWslDistro, poolSize, traceCodexWs,
                 cancellationToken);
         });
 
@@ -146,7 +154,8 @@ internal static class Program
     private static async Task<int> RunPipelineAsync(
         string input, string? output, int fanInThreshold, int complexityThreshold,
         bool incremental, bool fullRebuild, bool dryRun,
-        bool enrich, string? llmProvider, string? llmModel, string? llmApiKey, string? llmEndpoint, int? poolSize, bool traceCodexWs,
+        bool enrich, string? llmProvider, string? llmModel, string? llmApiKey, string? llmEndpoint,
+        string? codexWslDistro, int? poolSize, bool traceCodexWs,
         CancellationToken ct)
     {
         CodexAppServerPool? codexPool = null;
@@ -273,7 +282,11 @@ internal static class Program
                     CodexLogBoard.ConfigureInstances(plannedEndpoints);
                     try
                     {
-                        codexPool = await CodexAppServerPool.StartAsync(poolSize.Value, baseEndpoint, ct);
+                        codexPool = await CodexAppServerPool.StartAsync(
+                            poolSize.Value,
+                            baseEndpoint,
+                            codexWslDistro,
+                            ct);
                     }
                     catch (Exception ex)
                     {
@@ -432,6 +445,11 @@ internal static class Program
             {
                 result.Warnings.AddRange(loader.Diagnostics);
             }
+            if (loader.SuppressedPackageDiagnosticCount > 0)
+            {
+                result.Warnings.Add(
+                    $"{loader.SuppressedPackageDiagnosticCount} MSBuild package diagnostics were suppressed (non-blocking compatibility/vulnerability warnings).");
+            }
 
             // Display end-of-run summary (after progress context closes)
             RenderSummary(result);
@@ -439,9 +457,24 @@ internal static class Program
             // Display warnings after summary
             if (result.Warnings.Count > 0)
             {
-                AnsiConsole.MarkupLine($"\n[yellow]{result.Warnings.Count} warning(s):[/]");
-                foreach (var warning in result.Warnings)
+                var uniqueWarnings = result.Warnings
+                    .Where(w => !string.IsNullOrWhiteSpace(w))
+                    .Distinct(StringComparer.Ordinal)
+                    .ToList();
+
+                const int maxWarningsToDisplay = 25;
+                var visibleWarnings = uniqueWarnings.Take(maxWarningsToDisplay).ToList();
+                var hiddenWarningCount = uniqueWarnings.Count - visibleWarnings.Count;
+
+                AnsiConsole.MarkupLine($"\n[yellow]{uniqueWarnings.Count} warning(s):[/]");
+                foreach (var warning in visibleWarnings)
                     AnsiConsole.MarkupLine($"  [yellow]![/] {Markup.Escape(warning)}");
+
+                if (hiddenWarningCount > 0)
+                {
+                    AnsiConsole.MarkupLine(
+                        $"  [yellow]![/] {hiddenWarningCount} additional warning(s) omitted.");
+                }
             }
 
             return result.ExitCode;
@@ -545,83 +578,61 @@ internal static class Program
     }
 
     /// <summary>
-    /// Runs an async operation within a Live display with fixed-width character bars.
-    /// The IProgress callback uses a lock to serialize concurrent updates from parallel enrichment.
+    /// Runs an async operation within a Spectre live display with fixed-width character bars.
+    /// Progress updates only mutate state; render refreshes happen on a periodic loop to avoid
+    /// cursor race conditions and append/scroll artifacts on some terminals.
     /// </summary>
     private static async Task<PipelineResult> RunWithProgress(
         Func<IProgress<PipelineProgress>, Task<PipelineResult>> operation)
     {
-        PipelineResult result = null!;
-        var state = new ProgressState();
-        var renderLock = new object();
-        var anchorTop = Console.CursorTop;
-        var prevBottom = anchorTop;
-
-        void Refresh()
+        if (Console.IsOutputRedirected || Console.IsErrorRedirected)
         {
-            lock (renderLock)
-            {
-                IRenderable display;
-                lock (state) { display = RenderProgressDisplay(state); }
-
-                try
-                {
-                    Console.CursorVisible = false;
-                    var width = Console.WindowWidth;
-
-                    // Blank the entire previous render area first so shorter lines
-                    // don't leave leftover characters from a longer previous frame.
-                    var blank = new string(' ', width);
-                    for (var row = anchorTop; row < prevBottom; row++)
-                    {
-                        Console.SetCursorPosition(0, row);
-                        Console.Write(blank);
-                    }
-
-                    Console.SetCursorPosition(0, anchorTop);
-                    AnsiConsole.Write(display);
-                    AnsiConsole.WriteLine();
-
-                    prevBottom = Math.Max(Console.CursorTop, prevBottom);
-                }
-                catch (IOException)
-                {
-                    // Console not available (redirected output, etc.) — skip render.
-                }
-                finally
-                {
-                    try { Console.CursorVisible = true; } catch { /* best-effort */ }
-                }
-            }
+            // Non-interactive output (redirect/piped): skip live rendering.
+            var noUiProgress = new Progress<PipelineProgress>(_ => { });
+            return await operation(noUiProgress);
         }
+
+        PipelineResult? result = null;
+        var state = new ProgressState();
+        var stateLock = new object();
 
         var progress = new Progress<PipelineProgress>(p =>
         {
-            lock (state) { state.Update(p); }
-            Refresh();
+            lock (stateLock)
+            {
+                state.Update(p);
+            }
         });
 
-        // Periodic refresh picks up CodexLogBoard changes without subscriptions
-        using var refreshTimer = new Timer(_ => Refresh(), null, 250, 250);
-
-        try
+        await AnsiConsole
+            .Live(new Text(""))
+            .AutoClear(true)
+            .Overflow(VerticalOverflow.Crop)
+            .StartAsync(async ctx =>
         {
-            result = await operation(progress);
-        }
-        finally
-        {
-            refreshTimer.Change(Timeout.Infinite, Timeout.Infinite);
-            lock (renderLock)
+            var opTask = operation(progress);
+            while (!opTask.IsCompleted)
             {
-                try
+                lock (stateLock)
                 {
-                    Console.SetCursorPosition(0, prevBottom);
-                    Console.CursorVisible = true;
+                    ctx.UpdateTarget(RenderProgressDisplay(state));
                 }
-                catch { /* best-effort */ }
+                ctx.Refresh();
+                await Task.Delay(250);
             }
-        }
 
+            result = await opTask;
+            lock (stateLock)
+            {
+                ctx.UpdateTarget(RenderProgressDisplay(state));
+            }
+            ctx.Refresh();
+        });
+
+        if (result is null)
+        {
+            throw new InvalidOperationException("Pipeline operation completed without a result.");
+        }
         return result;
     }
 
@@ -682,19 +693,21 @@ internal static class Program
             var stage = state.Stages[i];
             if (stage.Total <= 0) continue;
 
-            var pct = stage.Total > 0 ? (double)stage.Current / stage.Total : 0;
+            var current = Math.Clamp(stage.Current, 0, stage.Total);
+            var pct = stage.Total > 0 ? (double)current / stage.Total : 0;
             var filled = (int)(pct * barWidth);
             var empty = barWidth - filled;
 
             var filledBar = new string('━', filled);
             var emptyBar = new string('━', empty);
-            var pctText = $"{pct * 100,4:F0}%";
+            var countText = $"{current}/{stage.Total}";
+            var pctText = $"{pct * 100,5:F1}%";
             var elapsed = stage.Timer.Elapsed.ToString(@"hh\:mm\:ss");
 
             // Line 1: Description
             rows.Add(new Markup($"  {Markup.Escape(stage.Description)}"));
-            // Line 2: Bar + percentage + elapsed
-            rows.Add(new Markup($"  [green]{filledBar}[/][grey]{emptyBar}[/] {pctText}  {elapsed}"));
+            // Line 2: Bar + completed count + percentage + elapsed
+            rows.Add(new Markup($"  [green]{filledBar}[/][grey]{emptyBar}[/] {countText}  {pctText}  {elapsed}"));
             // Blank line between stages
             rows.Add(new Text(""));
         }

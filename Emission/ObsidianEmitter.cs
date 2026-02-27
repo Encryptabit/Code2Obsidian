@@ -825,6 +825,11 @@ public sealed class ObsidianEmitter : IEmitter
     {
         foreach (var c in Path.GetInvalidFileNameChars())
             name = name.Replace(c, '_');
+        // Enforce Windows-invalid characters too so vaults stay readable from Windows Obsidian
+        // even when generated from Linux/WSL (where ':' and '<', '>' are normally allowed).
+        foreach (var c in "<>:\"/\\|?*")
+            name = name.Replace(c, '_');
+        name = name.TrimEnd('.', ' ');
         return name;
     }
 }
