@@ -7,8 +7,9 @@ namespace Code2Obsidian.Enrichment;
 /// Structured LLM response parsed from XML output.
 /// Summary is the detailed technical description, Purpose is a one-liner,
 /// Tags are comma-separated architectural/behavioral labels.
+/// Improvements contains actionable optimization suggestions for this entity.
 /// </summary>
-public sealed record EnrichmentResponse(string Summary, string Purpose, string[] Tags);
+public sealed record EnrichmentResponse(string Summary, string Purpose, string[] Tags, string Improvements = "");
 
 /// <summary>
 /// Wraps AnalysisResult with optional enrichment data.
@@ -20,6 +21,18 @@ public sealed class EnrichedResult
     /// The underlying analysis result.
     /// </summary>
     public AnalysisResult Analysis { get; }
+
+    /// <summary>
+    /// True when this run requested LLM "what it does" summary generation.
+    /// Emitters use this to decide whether to render summary blocks.
+    /// </summary>
+    public bool IncludeSummary { get; set; }
+
+    /// <summary>
+    /// True when this run requested LLM improvement suggestions.
+    /// Emitters use this to decide whether to render improvements blocks.
+    /// </summary>
+    public bool IncludeSuggestions { get; set; }
 
     /// <summary>
     /// LLM-generated enrichment responses for methods, keyed by MethodId.Value.

@@ -82,7 +82,14 @@ public sealed class ObsidianEmitter : IEmitter
             {
                 // Look up LLM-generated summary (null if no enrichment or not found)
                 result.MethodSummaries.TryGetValue(methodId.Value, out var methodEnrichment);
-                var content = RenderMethodNote(method, analysis, collisionSet, overloadIndex, methodEnrichment);
+                var content = RenderMethodNote(
+                    method,
+                    analysis,
+                    collisionSet,
+                    overloadIndex,
+                    methodEnrichment,
+                    result.IncludeSummary,
+                    result.IncludeSuggestions);
                 await File.WriteAllTextAsync(filePath, content, ct);
                 notesWritten++;
                 emittedNotes.Add((filePath, method.FilePath, methodId.Value));
@@ -114,8 +121,8 @@ public sealed class ObsidianEmitter : IEmitter
                 // Look up LLM-generated summary (null if no enrichment or not found)
                 result.TypeSummaries.TryGetValue(typeId.Value, out var typeEnrichment);
                 var content = typeInfo.Kind == TypeKindInfo.Interface
-                    ? RenderInterfaceNote(typeInfo, analysis, collisionSet, overloadIndex, typeEnrichment)
-                    : RenderClassNote(typeInfo, analysis, collisionSet, overloadIndex, typeEnrichment);
+                    ? RenderInterfaceNote(typeInfo, analysis, collisionSet, overloadIndex, typeEnrichment, result.IncludeSummary, result.IncludeSuggestions)
+                    : RenderClassNote(typeInfo, analysis, collisionSet, overloadIndex, typeEnrichment, result.IncludeSummary, result.IncludeSuggestions);
                 await File.WriteAllTextAsync(filePath, content, ct);
                 notesWritten++;
                 emittedNotes.Add((filePath, typeInfo.FilePath, typeId.Value));
@@ -268,7 +275,14 @@ public sealed class ObsidianEmitter : IEmitter
     /// Renders a complete markdown note for a single method with expanded YAML frontmatter,
     /// danger callouts for high-risk methods, header, signature, doc comment, and call graph links.
     /// </summary>
-    private string RenderMethodNote(MethodInfo method, AnalysisResult analysis, HashSet<string> collisionSet, Dictionary<MethodId, string?> overloadIndex, EnrichmentResponse? enrichment = null)
+    private string RenderMethodNote(
+        MethodInfo method,
+        AnalysisResult analysis,
+        HashSet<string> collisionSet,
+        Dictionary<MethodId, string?> overloadIndex,
+        EnrichmentResponse? enrichment = null,
+        bool includeSummary = false,
+        bool includeSuggestions = false)
     {
         var sb = new StringBuilder();
         var callGraph = analysis.CallGraph;
@@ -292,7 +306,7 @@ public sealed class ObsidianEmitter : IEmitter
             sb.AppendLine("  - danger/high-fan-in");
         if (method.CyclomaticComplexity >= _complexityThreshold)
             sb.AppendLine("  - danger/high-complexity");
-        if (enrichment is not null)
+        if (includeSummary && enrichment is not null)
         {
             foreach (var tag in enrichment.Tags)
             {
@@ -325,17 +339,21 @@ public sealed class ObsidianEmitter : IEmitter
         }
 
         // LLM-generated summary (only when enrichment provides one)
-        if (enrichment is not null)
+        if (includeSummary && enrichment is not null && HasSummaryContent(enrichment))
         {
             sb.AppendLine("## Summary");
-            sb.AppendLine($"**{enrichment.Purpose}**");
-            sb.AppendLine();
-            sb.AppendLine(enrichment.Summary);
+            if (!string.IsNullOrWhiteSpace(enrichment.Purpose))
+            {
+                sb.AppendLine($"**{enrichment.Purpose}**");
+                sb.AppendLine();
+            }
+            if (!string.IsNullOrWhiteSpace(enrichment.Summary))
+                sb.AppendLine(enrichment.Summary);
             sb.AppendLine();
         }
 
         // Method section (signature, doc, calls)
-        sb.Append(RenderMethodSection(method, analysis, collisionSet, overloadIndex));
+        sb.Append(RenderMethodSection(method, analysis, collisionSet, overloadIndex, enrichment, includeSuggestions));
 
         return sb.ToString();
     }
@@ -344,7 +362,13 @@ public sealed class ObsidianEmitter : IEmitter
     /// Renders a method section with signature, doc comment, and call graph links.
     /// Uses collision-free wikilinks: default [[ClassName.MethodName]], fallback [[Namespace.ClassName.MethodName]].
     /// </summary>
-    private static string RenderMethodSection(MethodInfo method, AnalysisResult analysis, HashSet<string> collisionSet, Dictionary<MethodId, string?> overloadIndex)
+    private static string RenderMethodSection(
+        MethodInfo method,
+        AnalysisResult analysis,
+        HashSet<string> collisionSet,
+        Dictionary<MethodId, string?> overloadIndex,
+        EnrichmentResponse? enrichment,
+        bool includeSuggestions)
     {
         var sb = new StringBuilder();
         var callGraph = analysis.CallGraph;
@@ -367,7 +391,14 @@ public sealed class ObsidianEmitter : IEmitter
         }
         sb.AppendLine();
         sb.AppendLine("##### Improvements:");
-        sb.AppendLine("- _TODO: Suggested optimizations._");
+        if (includeSuggestions && enrichment is not null && !string.IsNullOrWhiteSpace(enrichment.Improvements))
+        {
+            AppendImprovementLines(sb, enrichment.Improvements);
+        }
+        else
+        {
+            sb.AppendLine("- _TODO: Suggested optimizations._");
+        }
         sb.AppendLine();
 
         // Signature code block
@@ -455,7 +486,14 @@ public sealed class ObsidianEmitter : IEmitter
     /// Includes expanded YAML frontmatter with pattern detection, purpose summary,
     /// inheritance wikilinks, DI dependencies, properties/fields, and member index.
     /// </summary>
-    private static string RenderClassNote(TypeInfo typeInfo, AnalysisResult analysis, HashSet<string> collisionSet, Dictionary<MethodId, string?> overloadIndex, EnrichmentResponse? enrichment = null)
+    private static string RenderClassNote(
+        TypeInfo typeInfo,
+        AnalysisResult analysis,
+        HashSet<string> collisionSet,
+        Dictionary<MethodId, string?> overloadIndex,
+        EnrichmentResponse? enrichment = null,
+        bool includeSummary = false,
+        bool includeSuggestions = false)
     {
         var sb = new StringBuilder();
 
@@ -502,7 +540,7 @@ public sealed class ObsidianEmitter : IEmitter
         sb.AppendLine("  - class");
         if (detectedPattern is not null)
             sb.AppendLine($"  - pattern/{detectedPattern}");
-        if (enrichment is not null)
+        if (includeSummary && enrichment is not null)
         {
             foreach (var tag in enrichment.Tags)
             {
@@ -534,12 +572,23 @@ public sealed class ObsidianEmitter : IEmitter
         sb.AppendLine();
 
         // LLM-generated summary (only when enrichment provides one)
-        if (enrichment is not null)
+        if (includeSummary && enrichment is not null && HasSummaryContent(enrichment))
         {
             sb.AppendLine("## Summary");
-            sb.AppendLine($"**{enrichment.Purpose}**");
+            if (!string.IsNullOrWhiteSpace(enrichment.Purpose))
+            {
+                sb.AppendLine($"**{enrichment.Purpose}**");
+                sb.AppendLine();
+            }
+            if (!string.IsNullOrWhiteSpace(enrichment.Summary))
+                sb.AppendLine(enrichment.Summary);
             sb.AppendLine();
-            sb.AppendLine(enrichment.Summary);
+        }
+
+        if (includeSuggestions && enrichment is not null && !string.IsNullOrWhiteSpace(enrichment.Improvements))
+        {
+            sb.AppendLine("## Improvements");
+            AppendImprovementLines(sb, enrichment.Improvements);
             sb.AppendLine();
         }
 
@@ -634,7 +683,14 @@ public sealed class ObsidianEmitter : IEmitter
     /// Same structure as class notes, but includes "Known Implementors" section
     /// and sets dependency_count to 0 (interfaces have no constructors with DI).
     /// </summary>
-    private static string RenderInterfaceNote(TypeInfo typeInfo, AnalysisResult analysis, HashSet<string> collisionSet, Dictionary<MethodId, string?> overloadIndex, EnrichmentResponse? enrichment = null)
+    private static string RenderInterfaceNote(
+        TypeInfo typeInfo,
+        AnalysisResult analysis,
+        HashSet<string> collisionSet,
+        Dictionary<MethodId, string?> overloadIndex,
+        EnrichmentResponse? enrichment = null,
+        bool includeSummary = false,
+        bool includeSuggestions = false)
     {
         var sb = new StringBuilder();
 
@@ -672,7 +728,7 @@ public sealed class ObsidianEmitter : IEmitter
         sb.AppendLine("  - interface");
         if (detectedPattern is not null)
             sb.AppendLine($"  - pattern/{detectedPattern}");
-        if (enrichment is not null)
+        if (includeSummary && enrichment is not null)
         {
             foreach (var tag in enrichment.Tags)
             {
@@ -704,12 +760,23 @@ public sealed class ObsidianEmitter : IEmitter
         sb.AppendLine();
 
         // LLM-generated summary (only when enrichment provides one)
-        if (enrichment is not null)
+        if (includeSummary && enrichment is not null && HasSummaryContent(enrichment))
         {
             sb.AppendLine("## Summary");
-            sb.AppendLine($"**{enrichment.Purpose}**");
+            if (!string.IsNullOrWhiteSpace(enrichment.Purpose))
+            {
+                sb.AppendLine($"**{enrichment.Purpose}**");
+                sb.AppendLine();
+            }
+            if (!string.IsNullOrWhiteSpace(enrichment.Summary))
+                sb.AppendLine(enrichment.Summary);
             sb.AppendLine();
-            sb.AppendLine(enrichment.Summary);
+        }
+
+        if (includeSuggestions && enrichment is not null && !string.IsNullOrWhiteSpace(enrichment.Improvements))
+        {
+            sb.AppendLine("## Improvements");
+            AppendImprovementLines(sb, enrichment.Improvements);
             sb.AppendLine();
         }
 
@@ -785,6 +852,37 @@ public sealed class ObsidianEmitter : IEmitter
         }
 
         return sb.ToString();
+    }
+
+    private static bool HasSummaryContent(EnrichmentResponse enrichment) =>
+        !string.IsNullOrWhiteSpace(enrichment.Summary) || !string.IsNullOrWhiteSpace(enrichment.Purpose);
+
+    private static void AppendImprovementLines(StringBuilder sb, string raw)
+    {
+        var lines = raw
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(line => !string.IsNullOrWhiteSpace(line))
+            .ToList();
+
+        if (lines.Count == 0)
+        {
+            sb.AppendLine("- _TODO: Suggested optimizations._");
+            return;
+        }
+
+        foreach (var line in lines)
+        {
+            var trimmed = line.Trim();
+            if (trimmed.StartsWith("- ", StringComparison.Ordinal) ||
+                trimmed.StartsWith("* ", StringComparison.Ordinal))
+            {
+                sb.AppendLine(trimmed);
+            }
+            else
+            {
+                sb.AppendLine($"- {trimmed}");
+            }
+        }
     }
 
     /// <summary>

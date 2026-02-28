@@ -10,14 +10,38 @@ namespace Code2Obsidian.Enrichment.Prompts;
 public static class PromptBuilder
 {
     /// <summary>
-    /// System prompt instructing the LLM to respond in structured XML format.
+    /// Default system prompt for summary-only enrichment (backward compatible).
     /// </summary>
-    public static string SystemPrompt { get; } =
-        "Analyze the code entity, then respond ONLY with these XML tags:\n" +
-        "<summary>1-4 sentence technical summary for experienced developers. Reference implementation details.</summary>\n" +
-        "<purpose>Single sentence describing what this code does.</purpose>\n" +
-        "<tags>comma-separated: entry-point, data-access, async, utility, factory, DI, validation, error-handling</tags>\n" +
-        "No preamble or text outside these tags.";
+    public static string SystemPrompt { get; } = BuildSystemPrompt(includeSummary: true, includeSuggestions: false);
+
+    /// <summary>
+    /// Builds a system prompt tailored to summary and/or suggestions mode.
+    /// </summary>
+    public static string BuildSystemPrompt(bool includeSummary, bool includeSuggestions)
+    {
+        if (!includeSummary && !includeSuggestions)
+            throw new ArgumentException("At least one enrichment mode must be enabled.");
+
+        var lines = new List<string>
+        {
+            "Analyze the code entity, then respond ONLY with these XML tags:"
+        };
+
+        if (includeSummary)
+        {
+            lines.Add("<summary>1-4 sentence technical summary for experienced developers. Reference implementation details.</summary>");
+            lines.Add("<purpose>Single sentence describing what this code does.</purpose>");
+            lines.Add("<tags>comma-separated: entry-point, data-access, async, utility, factory, DI, validation, error-handling</tags>");
+        }
+
+        if (includeSuggestions)
+        {
+            lines.Add("<improvements>2-5 concise, concrete optimization/refactor suggestions as markdown bullets (each line starts with '- ').</improvements>");
+        }
+
+        lines.Add("No preamble or text outside these tags.");
+        return string.Join("\n", lines);
+    }
 
     /// <summary>
     /// Builds a user prompt for summarizing a C# method.
@@ -25,9 +49,36 @@ public static class PromptBuilder
     /// </summary>
     public static string BuildMethodPrompt(MethodInfo method, AnalysisResult analysis)
     {
+        return BuildMethodPrompt(
+            method,
+            analysis,
+            includeSummary: true,
+            includeSuggestions: false,
+            existingWhatItDoes: null);
+    }
+
+    /// <summary>
+    /// Builds a mode-aware user prompt for a C# method.
+    /// </summary>
+    public static string BuildMethodPrompt(
+        MethodInfo method,
+        AnalysisResult analysis,
+        bool includeSummary,
+        bool includeSuggestions,
+        string? existingWhatItDoes)
+    {
+        if (!includeSummary && !includeSuggestions)
+            throw new ArgumentException("At least one enrichment mode must be enabled.");
+
+        var intent = includeSummary && includeSuggestions
+            ? "Summarize this C# method and suggest concrete improvements:"
+            : includeSuggestions
+                ? "Suggest concrete improvements for this C# method:"
+                : "Summarize this C# method:";
+
         var lines = new List<string>
         {
-            "Summarize this C# method:",
+            intent,
             "",
             $"Signature: {method.DisplaySignature}",
             $"Class: {method.ContainingTypeName}",
@@ -55,6 +106,13 @@ public static class PromptBuilder
             lines.Add($"Called by: {string.Join(", ", callerNames)}");
         }
 
+        if (includeSuggestions && !string.IsNullOrWhiteSpace(existingWhatItDoes))
+        {
+            lines.Add("");
+            lines.Add("Existing \"What it does\" context:");
+            lines.Add(existingWhatItDoes.Trim());
+        }
+
         return string.Join("\n", lines);
     }
 
@@ -64,6 +122,27 @@ public static class PromptBuilder
     /// </summary>
     public static string BuildTypePrompt(TypeInfo type, AnalysisResult analysis)
     {
+        return BuildTypePrompt(
+            type,
+            analysis,
+            includeSummary: true,
+            includeSuggestions: false,
+            existingWhatItDoes: null);
+    }
+
+    /// <summary>
+    /// Builds a mode-aware user prompt for a C# type.
+    /// </summary>
+    public static string BuildTypePrompt(
+        TypeInfo type,
+        AnalysisResult analysis,
+        bool includeSummary,
+        bool includeSuggestions,
+        string? existingWhatItDoes)
+    {
+        if (!includeSummary && !includeSuggestions)
+            throw new ArgumentException("At least one enrichment mode must be enabled.");
+
         var kindName = type.Kind switch
         {
             TypeKindInfo.Class => "class",
@@ -73,9 +152,15 @@ public static class PromptBuilder
             _ => "type"
         };
 
+        var intent = includeSummary && includeSuggestions
+            ? $"Summarize the role of this C# {kindName} and suggest concrete improvements:"
+            : includeSuggestions
+                ? $"Suggest concrete improvements for this C# {kindName}:"
+                : $"Summarize the role and responsibility of this C# {kindName}:";
+
         var lines = new List<string>
         {
-            $"Summarize the role and responsibility of this C# {kindName}:",
+            intent,
             "",
             $"Type: {type.FullName}"
         };
@@ -109,6 +194,13 @@ public static class PromptBuilder
         if (!string.IsNullOrWhiteSpace(type.DocComment))
         {
             lines.Add($"Doc comment: {type.DocComment}");
+        }
+
+        if (includeSuggestions && !string.IsNullOrWhiteSpace(existingWhatItDoes))
+        {
+            lines.Add("");
+            lines.Add("Existing \"What it does\" context:");
+            lines.Add(existingWhatItDoes.Trim());
         }
 
         return string.Join("\n", lines);

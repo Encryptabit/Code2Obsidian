@@ -26,6 +26,8 @@ public sealed class LlmEnricher : IEnricher
     private readonly IProgress<PipelineProgress>? _progress;
     private readonly Func<int, int, int, decimal, bool>? _confirmEnrichment;
     private readonly IReadOnlySet<string>? _dirtyFiles;
+    private readonly bool _includeSummary;
+    private readonly bool _includeSuggestions;
 
     private int _inputTokensUsed;
     private int _outputTokensUsed;
@@ -41,14 +43,21 @@ public sealed class LlmEnricher : IEnricher
         LlmConfig config,
         IProgress<PipelineProgress>? progress = null,
         Func<int, int, int, decimal, bool>? confirmEnrichment = null,
-        IReadOnlySet<string>? dirtyFiles = null)
+        IReadOnlySet<string>? dirtyFiles = null,
+        bool includeSummary = true,
+        bool includeSuggestions = false)
     {
+        if (!includeSummary && !includeSuggestions)
+            throw new ArgumentException("LlmEnricher requires at least one mode: summary and/or suggestions.");
+
         _client = client;
         _cache = cache;
         _config = config;
         _progress = progress;
         _confirmEnrichment = confirmEnrichment;
         _dirtyFiles = dirtyFiles;
+        _includeSummary = includeSummary;
+        _includeSuggestions = includeSuggestions;
     }
 
     // Read-only accessors for reconstructing with a different IProgress
@@ -57,9 +66,15 @@ public sealed class LlmEnricher : IEnricher
     internal LlmConfig Config => _config;
     internal Func<int, int, int, decimal, bool>? ConfirmEnrichment => _confirmEnrichment;
     internal IReadOnlySet<string>? DirtyFiles => _dirtyFiles;
+    internal bool IncludeSummary => _includeSummary;
+    internal bool IncludeSuggestions => _includeSuggestions;
 
     /// <summary>Human-readable name for pipeline progress display.</summary>
-    public string Name => "LLM Enrichment";
+    public string Name => _includeSummary && _includeSuggestions
+        ? "LLM Enrichment + Suggestions"
+        : _includeSummary
+            ? "LLM Enrichment"
+            : "LLM Suggestions";
 
     /// <summary>Cumulative input tokens consumed across all LLM calls (thread-safe).</summary>
     public int InputTokensUsed => Volatile.Read(ref _inputTokensUsed);
@@ -84,43 +99,76 @@ public sealed class LlmEnricher : IEnricher
     /// </summary>
     public async Task EnrichAsync(AnalysisResult analysis, EnrichedResult enriched, CancellationToken ct)
     {
+        enriched.IncludeSummary |= _includeSummary;
+        enriched.IncludeSuggestions |= _includeSuggestions;
+
         using var semaphore = new SemaphoreSlim(_config.MaxConcurrency);
+        var systemPrompt = PromptBuilder.BuildSystemPrompt(_includeSummary, _includeSuggestions);
+        var modeLabel = _includeSummary && _includeSuggestions
+            ? "enrich/suggest"
+            : _includeSummary
+                ? "enrich"
+                : "suggest";
 
         // Phase 1: Partition methods into cached vs uncached
-        var uncachedMethods = new List<(MethodInfo method, string hash)>();
+        var uncachedMethods = new List<(MethodInfo method, string hash, string? existingWhatItDoes)>();
         foreach (var (methodId, method) in analysis.Methods)
         {
             ct.ThrowIfCancellationRequested();
             var hash = ContentHasher.ComputeMethodHash(method, analysis.CallGraph);
             var cached = _cache.TryGet(methodId.Value, hash);
-            if (cached is not null)
+            if (cached is null)
+            {
+                // Backward compatibility: previous versions keyed method cache with
+                // call-graph-sensitive hashes. Reuse those entries once and migrate.
+                var legacyHash = ContentHasher.ComputeLegacyMethodHash(method, analysis.CallGraph);
+                if (!string.Equals(legacyHash, hash, StringComparison.Ordinal))
+                {
+                    cached = _cache.TryGet(methodId.Value, legacyHash);
+                    if (cached is not null)
+                    {
+                        _cache.Put(methodId.Value, hash, cached, _config.Model, updateSummary: true, updateSuggestions: HasSuggestions(cached));
+                    }
+                }
+            }
+
+            if (cached is not null && (HasSummary(cached) || HasSuggestions(cached)))
             {
                 enriched.MethodSummaries[methodId.Value] = cached;
+            }
+
+            if (cached is not null && IsCacheHitForRequestedModes(cached))
+            {
                 Interlocked.Increment(ref _entitiesCached);
             }
             else if (_dirtyFiles is null || _dirtyFiles.Contains(method.FilePath))
             {
                 // Only enrich uncached entities in dirty files (or all if no dirty filter)
-                uncachedMethods.Add((method, hash));
+                uncachedMethods.Add((method, hash, BuildWhatItDoesContext(cached)));
             }
             // else: unchanged file, uncached — skip (don't send to LLM in incremental mode)
         }
 
         // Phase 2: Partition types into cached vs uncached
-        var uncachedTypes = new List<(TypeInfo type, string hash)>();
+        var uncachedTypes = new List<(TypeInfo type, string hash, string? existingWhatItDoes)>();
         foreach (var (typeId, type) in analysis.Types)
         {
             ct.ThrowIfCancellationRequested();
             var hash = ContentHasher.ComputeTypeHash(type);
             var cached = _cache.TryGet(typeId.Value, hash);
-            if (cached is not null)
+
+            if (cached is not null && (HasSummary(cached) || HasSuggestions(cached)))
             {
                 enriched.TypeSummaries[typeId.Value] = cached;
+            }
+
+            if (cached is not null && IsCacheHitForRequestedModes(cached))
+            {
                 Interlocked.Increment(ref _entitiesCached);
             }
             else if (_dirtyFiles is null || _dirtyFiles.Contains(type.FilePath))
             {
-                uncachedTypes.Add((type, hash));
+                uncachedTypes.Add((type, hash, BuildWhatItDoesContext(cached)));
             }
         }
 
@@ -128,7 +176,7 @@ public sealed class LlmEnricher : IEnricher
         var uncachedCount = uncachedMethods.Count + uncachedTypes.Count;
 
         ReportProgress(
-            $"Found {totalEntities} entities: {EntitiesCached} cached, {uncachedCount} to enrich",
+            $"Found {totalEntities} entities: {EntitiesCached} cached, {uncachedCount} to {modeLabel}",
             EntitiesCached, totalEntities);
 
         // Cost estimation and confirmation before LLM calls
@@ -142,8 +190,13 @@ public sealed class LlmEnricher : IEnricher
                 var totalSampleTokens = 0;
                 for (int i = 0; i < sampleCount; i++)
                 {
-                    var prompt = PromptBuilder.BuildMethodPrompt(uncachedMethods[i].method, analysis);
-                    totalSampleTokens += CostEstimator.EstimateTokens(PromptBuilder.SystemPrompt + prompt);
+                    var prompt = PromptBuilder.BuildMethodPrompt(
+                        uncachedMethods[i].method,
+                        analysis,
+                        _includeSummary,
+                        _includeSuggestions,
+                        uncachedMethods[i].existingWhatItDoes);
+                    totalSampleTokens += CostEstimator.EstimateTokens(systemPrompt + prompt);
                 }
                 avgInputTokens = totalSampleTokens / sampleCount;
             }
@@ -158,6 +211,7 @@ public sealed class LlmEnricher : IEnricher
 
             if (!_confirmEnrichment(uncachedCount, estInputTokens, estOutputTokens, estCost))
             {
+                await _cache.FlushAsync(ct);
                 ReportProgress("Enrichment skipped by user", EntitiesCached, totalEntities, force: true);
                 return;
             }
@@ -165,33 +219,43 @@ public sealed class LlmEnricher : IEnricher
 
         // Phase 3: Process uncached methods in parallel with SemaphoreSlim gating
         var methodTasks = uncachedMethods.Select(item => ProcessMethodAsync(
-            item.method, item.hash, analysis, enriched, semaphore, totalEntities, ct));
+            item.method, item.hash, item.existingWhatItDoes, systemPrompt,
+            analysis, enriched, semaphore, totalEntities, ct));
         await Task.WhenAll(methodTasks);
 
         // Phase 4: Process uncached types in parallel with SemaphoreSlim gating
         var typeTasks = uncachedTypes.Select(item => ProcessTypeAsync(
-            item.type, item.hash, analysis, enriched, semaphore, totalEntities, ct));
+            item.type, item.hash, item.existingWhatItDoes, systemPrompt,
+            analysis, enriched, semaphore, totalEntities, ct));
         await Task.WhenAll(typeTasks);
+
+        // Ensure all queued cache writes are committed before stage completion.
+        await _cache.FlushAsync(ct);
 
         // Final progress report
         ReportProgress(
-            $"Enrichment complete: {EntitiesEnriched} enriched, {EntitiesCached} cached, {EntitiesFailed} failed " +
+            $"LLM {modeLabel} complete: {EntitiesEnriched} enriched, {EntitiesCached} cached, {EntitiesFailed} failed " +
             $"({InputTokensUsed} input tokens, {OutputTokensUsed} output tokens)",
             totalEntities, totalEntities, force: true);
     }
 
     private async Task ProcessMethodAsync(
-        MethodInfo method, string hash, AnalysisResult analysis,
+        MethodInfo method, string hash, string? existingWhatItDoes, string systemPrompt, AnalysisResult analysis,
         EnrichedResult enriched, SemaphoreSlim semaphore, int totalEntities,
         CancellationToken ct)
     {
         await semaphore.WaitAsync(ct);
         try
         {
-            var userPrompt = PromptBuilder.BuildMethodPrompt(method, analysis);
+            var userPrompt = PromptBuilder.BuildMethodPrompt(
+                method,
+                analysis,
+                _includeSummary,
+                _includeSuggestions,
+                existingWhatItDoes);
             var messages = new List<ChatMessage>
             {
-                new(ChatRole.System, PromptBuilder.SystemPrompt),
+                new(ChatRole.System, systemPrompt),
                 new(ChatRole.User, userPrompt)
             };
 
@@ -210,7 +274,7 @@ public sealed class LlmEnricher : IEnricher
             if (response.Usage?.OutputTokenCount is long outputTokens)
                 Interlocked.Add(ref _outputTokensUsed, (int)outputTokens);
 
-            var enrichmentResponse = ParseXmlResponse(rawText);
+            var enrichmentResponse = ParseXmlResponse(rawText, _includeSummary, _includeSuggestions);
             if (enrichmentResponse is null)
             {
                 Interlocked.Increment(ref _entitiesFailed);
@@ -218,10 +282,25 @@ public sealed class LlmEnricher : IEnricher
                 return;
             }
 
-            _cache.Put(method.Id.Value, hash, enrichmentResponse, _config.Model);
+            var updateSummary = _includeSummary && HasSummary(enrichmentResponse);
+            var updateSuggestions = _includeSuggestions && HasSuggestions(enrichmentResponse);
+            if (!updateSummary && !updateSuggestions)
+            {
+                Interlocked.Increment(ref _entitiesFailed);
+                ReportEntityProgress($"Failed method: {method.Name}", totalEntities);
+                return;
+            }
+
+            _cache.Put(
+                method.Id.Value,
+                hash,
+                enrichmentResponse,
+                _config.Model,
+                updateSummary: updateSummary,
+                updateSuggestions: updateSuggestions);
             enriched.MethodSummaries[method.Id.Value] = enrichmentResponse;
             Interlocked.Increment(ref _entitiesEnriched);
-            ReportEntityProgress($"Enriched method: {method.Name}", totalEntities);
+            ReportEntityProgress($"Processed method: {method.Name}", totalEntities);
         }
         catch (OperationCanceledException)
         {
@@ -241,17 +320,22 @@ public sealed class LlmEnricher : IEnricher
     }
 
     private async Task ProcessTypeAsync(
-        TypeInfo type, string hash, AnalysisResult analysis,
+        TypeInfo type, string hash, string? existingWhatItDoes, string systemPrompt, AnalysisResult analysis,
         EnrichedResult enriched, SemaphoreSlim semaphore, int totalEntities,
         CancellationToken ct)
     {
         await semaphore.WaitAsync(ct);
         try
         {
-            var userPrompt = PromptBuilder.BuildTypePrompt(type, analysis);
+            var userPrompt = PromptBuilder.BuildTypePrompt(
+                type,
+                analysis,
+                _includeSummary,
+                _includeSuggestions,
+                existingWhatItDoes);
             var messages = new List<ChatMessage>
             {
-                new(ChatRole.System, PromptBuilder.SystemPrompt),
+                new(ChatRole.System, systemPrompt),
                 new(ChatRole.User, userPrompt)
             };
 
@@ -270,7 +354,7 @@ public sealed class LlmEnricher : IEnricher
             if (response.Usage?.OutputTokenCount is long outputTokens)
                 Interlocked.Add(ref _outputTokensUsed, (int)outputTokens);
 
-            var enrichmentResponse = ParseXmlResponse(rawText);
+            var enrichmentResponse = ParseXmlResponse(rawText, _includeSummary, _includeSuggestions);
             if (enrichmentResponse is null)
             {
                 Interlocked.Increment(ref _entitiesFailed);
@@ -278,10 +362,25 @@ public sealed class LlmEnricher : IEnricher
                 return;
             }
 
-            _cache.Put(type.Id.Value, hash, enrichmentResponse, _config.Model);
+            var updateSummary = _includeSummary && HasSummary(enrichmentResponse);
+            var updateSuggestions = _includeSuggestions && HasSuggestions(enrichmentResponse);
+            if (!updateSummary && !updateSuggestions)
+            {
+                Interlocked.Increment(ref _entitiesFailed);
+                ReportEntityProgress($"Failed type: {type.Name}", totalEntities);
+                return;
+            }
+
+            _cache.Put(
+                type.Id.Value,
+                hash,
+                enrichmentResponse,
+                _config.Model,
+                updateSummary: updateSummary,
+                updateSuggestions: updateSuggestions);
             enriched.TypeSummaries[type.Id.Value] = enrichmentResponse;
             Interlocked.Increment(ref _entitiesEnriched);
-            ReportEntityProgress($"Enriched type: {type.Name}", totalEntities);
+            ReportEntityProgress($"Processed type: {type.Name}", totalEntities);
         }
         catch (OperationCanceledException)
         {
@@ -304,7 +403,7 @@ public sealed class LlmEnricher : IEnricher
     /// Uses triple fallback: XDocument parse -> regex extraction -> raw text wrapping.
     /// Returns null if the input is null or whitespace.
     /// </summary>
-    internal static EnrichmentResponse? ParseXmlResponse(string raw)
+    internal static EnrichmentResponse? ParseXmlResponse(string raw, bool includeSummary, bool includeSuggestions)
     {
         if (string.IsNullOrWhiteSpace(raw))
             return null;
@@ -312,6 +411,7 @@ public sealed class LlmEnricher : IEnricher
         string? summary = null;
         string? purpose = null;
         string? tagsRaw = null;
+        string? improvements = null;
 
         // Attempt 1: XDocument parse
         try
@@ -320,6 +420,7 @@ public sealed class LlmEnricher : IEnricher
             summary = doc.Root?.Element("summary")?.Value;
             purpose = doc.Root?.Element("purpose")?.Value;
             tagsRaw = doc.Root?.Element("tags")?.Value;
+            improvements = doc.Root?.Element("improvements")?.Value;
         }
         catch (System.Xml.XmlException)
         {
@@ -327,26 +428,38 @@ public sealed class LlmEnricher : IEnricher
         }
 
         // Attempt 2: Regex fallback (if XDocument didn't find content)
-        if (string.IsNullOrWhiteSpace(summary) && string.IsNullOrWhiteSpace(purpose))
+        if ((string.IsNullOrWhiteSpace(summary) && string.IsNullOrWhiteSpace(purpose)) || string.IsNullOrWhiteSpace(improvements))
         {
             var summaryMatch = Regex.Match(raw, @"<summary>(.*?)</summary>", RegexOptions.Singleline);
             var purposeMatch = Regex.Match(raw, @"<purpose>(.*?)</purpose>", RegexOptions.Singleline);
             var tagsMatch = Regex.Match(raw, @"<tags>(.*?)</tags>", RegexOptions.Singleline);
+            var improvementsMatch = Regex.Match(raw, @"<improvements>(.*?)</improvements>", RegexOptions.Singleline);
 
             if (summaryMatch.Success) summary = summaryMatch.Groups[1].Value;
             if (purposeMatch.Success) purpose = purposeMatch.Groups[1].Value;
             if (tagsMatch.Success) tagsRaw = tagsMatch.Groups[1].Value;
+            if (improvementsMatch.Success) improvements = improvementsMatch.Groups[1].Value;
         }
 
         // Apply HtmlDecode to extracted values
         if (summary is not null) summary = WebUtility.HtmlDecode(summary);
         if (purpose is not null) purpose = WebUtility.HtmlDecode(purpose);
         if (tagsRaw is not null) tagsRaw = WebUtility.HtmlDecode(tagsRaw);
+        if (improvements is not null) improvements = WebUtility.HtmlDecode(improvements);
 
-        // Double fallback: if neither method found content, wrap raw text
-        if (string.IsNullOrWhiteSpace(summary) && string.IsNullOrWhiteSpace(purpose))
+        // Mode-aware fallback for malformed non-XML output.
+        if (includeSummary && string.IsNullOrWhiteSpace(summary) && string.IsNullOrWhiteSpace(purpose))
         {
-            return new EnrichmentResponse(raw.Trim(), raw.Trim(), Array.Empty<string>());
+            summary = raw.Trim();
+            purpose = raw.Trim();
+        }
+
+        if (includeSuggestions && string.IsNullOrWhiteSpace(improvements))
+        {
+            if (!includeSummary || (string.IsNullOrWhiteSpace(summary) && string.IsNullOrWhiteSpace(purpose)))
+            {
+                improvements = raw.Trim();
+            }
         }
 
         // Parse tags
@@ -357,7 +470,35 @@ public sealed class LlmEnricher : IEnricher
         return new EnrichmentResponse(
             summary?.Trim() ?? "",
             purpose?.Trim() ?? "",
-            tags);
+            tags,
+            improvements?.Trim() ?? "");
+    }
+
+    private bool IsCacheHitForRequestedModes(EnrichmentResponse cached)
+    {
+        var hasSummary = !_includeSummary || HasSummary(cached);
+        var hasSuggestions = !_includeSuggestions || HasSuggestions(cached);
+        return hasSummary && hasSuggestions;
+    }
+
+    private static bool HasSummary(EnrichmentResponse response) =>
+        !string.IsNullOrWhiteSpace(response.Summary) || !string.IsNullOrWhiteSpace(response.Purpose);
+
+    private static bool HasSuggestions(EnrichmentResponse response) =>
+        !string.IsNullOrWhiteSpace(response.Improvements);
+
+    private static string? BuildWhatItDoesContext(EnrichmentResponse? response)
+    {
+        if (response is null || !HasSummary(response))
+            return null;
+
+        var parts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(response.Purpose))
+            parts.Add(response.Purpose.Trim());
+        if (!string.IsNullOrWhiteSpace(response.Summary))
+            parts.Add(response.Summary.Trim());
+
+        return parts.Count == 0 ? null : string.Join("\n\n", parts);
     }
 
     private void ReportEntityProgress(string description, int total)

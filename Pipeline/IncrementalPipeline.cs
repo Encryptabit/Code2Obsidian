@@ -106,9 +106,24 @@ public sealed class IncrementalPipeline
         // Normalize change set paths to absolute paths matching Roslyn document.FilePath
         var absoluteChangedFiles = NormalizeToAbsolutePaths(changeSet.ChangedFilePaths, solutionDir);
 
-        // If no changes detected, fast exit
+        // If no source changes are detected, fast exit unless enrichment is enabled.
         if (absoluteChangedFiles.Count == 0 && changeSet.DeletedFilePaths.Count == 0)
         {
+            if (_enrichers.Count > 0)
+            {
+                _progress?.Report(new PipelineProgress(
+                    PipelineStage.Analyzing,
+                    "No source changes detected. Running enrichment pass for uncached entities...",
+                    0,
+                    totalDocuments));
+
+                var fullResult = await RunFullWithStateSaveAsync(ct);
+                fullResult.WasIncremental = true;
+                fullResult.Warnings.Add(
+                    "No source changes detected; ran enrichment pass to retry uncached entities.");
+                return fullResult;
+            }
+
             result.AnalysisDuration = sw.Elapsed;
             result.FilesAnalyzed = 0;
             result.FilesSkipped = totalDocuments;
@@ -207,6 +222,7 @@ public sealed class IncrementalPipeline
             1));
 
         var reanalyzedFileSet = new HashSet<string>(affectedFiles, StringComparer.OrdinalIgnoreCase);
+        var llmDirtyFileSet = new HashSet<string>(absoluteChangedFiles, StringComparer.OrdinalIgnoreCase);
         var mergedAnalysis = AnalysisResultMerger.Merge(freshAnalysis, state, reanalyzedFileSet);
 
         // Enrichment pass - only enrich entities in dirty files (incremental mode)
@@ -215,12 +231,20 @@ public sealed class IncrementalPipeline
         {
             var enricher = _enrichers[i];
             // In incremental mode, reconstruct LlmEnricher with dirty file filter
-            // so only changed/new entities are sent to the LLM
+            // so only git-tracked changed/new entities are sent to the LLM.
+            // Ripple-expanded files are still reanalyzed/emitted for correctness,
+            // but they don't trigger fresh enrichment calls by default.
             if (enricher is LlmEnricher llm)
             {
                 enricher = new LlmEnricher(
-                    llm.Client, llm.Cache, llm.Config, _progress, llm.ConfirmEnrichment,
-                    dirtyFiles: reanalyzedFileSet);
+                    llm.Client,
+                    llm.Cache,
+                    llm.Config,
+                    _progress,
+                    llm.ConfirmEnrichment,
+                    dirtyFiles: llmDirtyFileSet,
+                    includeSummary: llm.IncludeSummary,
+                    includeSuggestions: llm.IncludeSuggestions);
             }
             _progress?.Report(new PipelineProgress(
                 PipelineStage.Enriching,

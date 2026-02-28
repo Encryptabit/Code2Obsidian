@@ -43,6 +43,11 @@ public static class StateSchema
         {
             MigrateToV3(connection);
         }
+
+        if (version < 4)
+        {
+            MigrateToV4(connection);
+        }
     }
 
     /// <summary>
@@ -135,6 +140,59 @@ public static class StateSchema
         }
 
         transaction.Commit();
+    }
+
+    /// <summary>
+    /// Adds optional suggestion fields to summaries for incremental adoption of
+    /// improvements caching without invalidating existing summary entries.
+    /// </summary>
+    private static void MigrateToV4(SqliteConnection connection)
+    {
+        using var transaction = connection.BeginTransaction();
+
+        if (!ColumnExists(connection, "summaries", "improvements"))
+        {
+            using var addImprovements = connection.CreateCommand();
+            addImprovements.CommandText = "ALTER TABLE summaries ADD COLUMN improvements TEXT";
+            addImprovements.ExecuteNonQuery();
+        }
+
+        if (!ColumnExists(connection, "summaries", "improvements_model_id"))
+        {
+            using var addModel = connection.CreateCommand();
+            addModel.CommandText = "ALTER TABLE summaries ADD COLUMN improvements_model_id TEXT";
+            addModel.ExecuteNonQuery();
+        }
+
+        if (!ColumnExists(connection, "summaries", "improvements_created_at"))
+        {
+            using var addCreatedAt = connection.CreateCommand();
+            addCreatedAt.CommandText = "ALTER TABLE summaries ADD COLUMN improvements_created_at TEXT";
+            addCreatedAt.ExecuteNonQuery();
+        }
+
+        using (var versionCmd = connection.CreateCommand())
+        {
+            versionCmd.CommandText = "PRAGMA user_version = 4";
+            versionCmd.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+    }
+
+    private static bool ColumnExists(SqliteConnection connection, string tableName, string columnName)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = $"PRAGMA table_info({tableName})";
+
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            if (string.Equals(reader.GetString(1), columnName, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
     }
 
     /// <summary>

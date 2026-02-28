@@ -52,7 +52,12 @@ internal static class Program
 
         var incrementalOption = new Option<bool>("--incremental")
         {
-            Description = "Only regenerate notes for files changed since last run"
+            Description = "Enable incremental mode (default): only regenerate notes for files changed since last run"
+        };
+
+        var noIncrementalOption = new Option<bool>("--no-incremental")
+        {
+            Description = "Disable incremental mode and run full analysis without reading/saving incremental state"
         };
 
         var fullRebuildOption = new Option<bool>("--full-rebuild")
@@ -68,6 +73,11 @@ internal static class Program
         var enrichOption = new Option<bool>("--enrich")
         {
             Description = "Generate LLM-powered plain-English summaries for methods and classes"
+        };
+
+        var suggestionsOption = new Option<bool>("--suggestions")
+        {
+            Description = "Generate LLM-powered optimization/refactor suggestions for entities"
         };
 
         var llmProviderOption = new Option<string?>("--llm-provider")
@@ -112,9 +122,11 @@ internal static class Program
             fanInThresholdOption,
             complexityThresholdOption,
             incrementalOption,
+            noIncrementalOption,
             fullRebuildOption,
             dryRunOption,
             enrichOption,
+            suggestionsOption,
             llmProviderOption,
             llmModelOption,
             llmApiKeyOption,
@@ -130,10 +142,18 @@ internal static class Program
             var output = parseResult.GetValue(outputOption);
             var fanInThreshold = parseResult.GetValue(fanInThresholdOption);
             var complexityThreshold = parseResult.GetValue(complexityThresholdOption);
-            var incremental = parseResult.GetValue(incrementalOption);
+            var incrementalRequested = parseResult.GetValue(incrementalOption);
+            var noIncremental = parseResult.GetValue(noIncrementalOption);
+            if (incrementalRequested && noIncremental)
+            {
+                AnsiConsole.MarkupLine("[red]Error:[/] Cannot use both --incremental and --no-incremental.");
+                return 1;
+            }
+            var incremental = !noIncremental;
             var fullRebuild = parseResult.GetValue(fullRebuildOption);
             var dryRun = parseResult.GetValue(dryRunOption);
             var enrich = parseResult.GetValue(enrichOption);
+            var suggestions = parseResult.GetValue(suggestionsOption);
             var llmProvider = parseResult.GetValue(llmProviderOption);
             var llmModel = parseResult.GetValue(llmModelOption);
             var llmApiKey = parseResult.GetValue(llmApiKeyOption);
@@ -143,7 +163,7 @@ internal static class Program
             var traceCodexWs = parseResult.GetValue(traceCodexWsOption);
 
             return await RunPipelineAsync(input, output, fanInThreshold, complexityThreshold,
-                incremental, fullRebuild, dryRun, enrich, llmProvider, llmModel, llmApiKey, llmEndpoint,
+                incremental, fullRebuild, dryRun, enrich, suggestions, llmProvider, llmModel, llmApiKey, llmEndpoint,
                 codexWslDistro, poolSize, traceCodexWs,
                 cancellationToken);
         });
@@ -155,7 +175,7 @@ internal static class Program
     private static async Task<int> RunPipelineAsync(
         string input, string? output, int fanInThreshold, int complexityThreshold,
         bool incremental, bool fullRebuild, bool dryRun,
-        bool enrich, string? llmProvider, string? llmModel, string? llmApiKey, string? llmEndpoint,
+        bool enrich, bool suggestions, string? llmProvider, string? llmModel, string? llmApiKey, string? llmEndpoint,
         string? codexWslDistro, int? poolSize, bool traceCodexWs,
         CancellationToken ct)
     {
@@ -164,9 +184,10 @@ internal static class Program
         {
             CodexLogBoard.Reset();
 
-            if (poolSize is not null && !enrich)
+            var llmRequested = enrich || suggestions;
+            if (poolSize is not null && !llmRequested)
             {
-                AnsiConsole.MarkupLine("[red]Error:[/] --pool-size requires --enrich.");
+                AnsiConsole.MarkupLine("[red]Error:[/] --pool-size requires --enrich or --suggestions.");
                 return 1;
             }
 
@@ -191,7 +212,7 @@ internal static class Program
             var enrichers = new List<IEnricher>();
             LlmEnricher? llmEnricher = null;
 
-            if (enrich)
+            if (llmRequested)
             {
                 var configPath = Path.Combine(Path.GetDirectoryName(solutionPath)!, "code2obsidian.llm.json");
                 var config = LlmConfigLoader.TryLoad(configPath);
@@ -385,18 +406,31 @@ internal static class Program
                 var cache = new SummaryCache(stateDbPath);
 
                 // Create LlmEnricher (progress wired per execution case)
-                // No confirmation prompt: --enrich flag is explicit user consent
-                llmEnricher = new LlmEnricher(client, cache, config, progress: null, confirmEnrichment: null);
+                // No confirmation prompt: explicit LLM flags are treated as user consent.
+                llmEnricher = new LlmEnricher(
+                    client,
+                    cache,
+                    config,
+                    progress: null,
+                    confirmEnrichment: null,
+                    dirtyFiles: null,
+                    includeSummary: enrich,
+                    includeSuggestions: suggestions);
                 enrichers.Add(llmEnricher);
 
+                var llmModeText = enrich && suggestions
+                    ? "summaries + suggestions"
+                    : enrich
+                        ? "summaries"
+                        : "suggestions";
                 var endpointCount = CountConfiguredEndpoints(config);
                 if (config.Provider.Equals("codex", StringComparison.OrdinalIgnoreCase) && endpointCount > 1)
                 {
-                    AnsiConsole.MarkupLine($"[green]LLM enrichment enabled:[/] {config.Provider}/{config.Model} ([green]{endpointCount} endpoints pooled[/])");
+                    AnsiConsole.MarkupLine($"[green]LLM enabled ({llmModeText}):[/] {config.Provider}/{config.Model} ([green]{endpointCount} endpoints pooled[/])");
                 }
                 else
                 {
-                    AnsiConsole.MarkupLine($"[green]LLM enrichment enabled:[/] {config.Provider}/{config.Model}");
+                    AnsiConsole.MarkupLine($"[green]LLM enabled ({llmModeText}):[/] {config.Provider}/{config.Model}");
                 }
                 AnsiConsole.WriteLine();
             }
@@ -432,7 +466,7 @@ internal static class Program
                     // Case E: --dry-run -> show what would change without writing
                     if (!incremental)
                     {
-                        AnsiConsole.MarkupLine("[yellow]--dry-run without --incremental: showing full analysis preview.[/]");
+                        AnsiConsole.MarkupLine("[yellow]--dry-run with --no-incremental: showing full analysis preview.[/]");
                     }
 
                     if (!state.TryLoad(out _))
@@ -492,7 +526,7 @@ internal static class Program
             }
             else
             {
-                // Case A: no incremental flags -> full analysis via existing Pipeline (no state)
+                // Case A: --no-incremental (and no incremental-only flags) -> full analysis via existing Pipeline (no state)
                 result = await RunFullPipeline(context, outputDir, fanInThreshold, complexityThreshold, enrichers, ct);
             }
 
@@ -584,7 +618,14 @@ internal static class Program
             {
                 // Reconstruct with the live progress context (dirtyFiles set later by IncrementalPipeline if needed)
                 newLlm = new LlmEnricher(
-                    llm.Client, llm.Cache, llm.Config, progress, llm.ConfirmEnrichment, llm.DirtyFiles);
+                    llm.Client,
+                    llm.Cache,
+                    llm.Config,
+                    progress,
+                    llm.ConfirmEnrichment,
+                    llm.DirtyFiles,
+                    llm.IncludeSummary,
+                    llm.IncludeSuggestions);
                 result.Add(newLlm);
             }
             else
