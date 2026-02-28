@@ -708,20 +708,31 @@ internal static class Program
             .StartAsync(async ctx =>
         {
             var opTask = operation(progress);
+            int? lastRenderedFingerprint = null;
             while (!opTask.IsCompleted)
             {
+                var codexEntries = CodexLogBoard.Snapshot();
+                var shouldRefresh = false;
                 lock (stateLock)
                 {
-                    ctx.UpdateTarget(RenderProgressDisplay(state));
+                    var fingerprint = ComputeRenderFingerprint(state, codexEntries);
+                    if (lastRenderedFingerprint != fingerprint)
+                    {
+                        lastRenderedFingerprint = fingerprint;
+                        ctx.UpdateTarget(RenderProgressDisplay(state, codexEntries));
+                        shouldRefresh = true;
+                    }
                 }
-                ctx.Refresh();
+                if (shouldRefresh)
+                    ctx.Refresh();
                 await Task.Delay(250);
             }
 
             result = await opTask;
+            var finalCodexEntries = CodexLogBoard.Snapshot();
             lock (stateLock)
             {
-                ctx.UpdateTarget(RenderProgressDisplay(state));
+                ctx.UpdateTarget(RenderProgressDisplay(state, finalCodexEntries));
             }
             ctx.Refresh();
         });
@@ -774,8 +785,35 @@ internal static class Program
         }
     }
 
+    private static int ComputeRenderFingerprint(
+        ProgressState state,
+        IReadOnlyList<(string Endpoint, DateTimeOffset Timestamp, string Message)> codexEntries)
+    {
+        var hash = new HashCode();
 
-    private static IRenderable RenderProgressDisplay(ProgressState state)
+        foreach (var stage in state.Stages)
+        {
+            hash.Add(stage.Description, StringComparer.Ordinal);
+            hash.Add(stage.Current);
+            hash.Add(stage.Total);
+            hash.Add(stage.Timer.IsRunning);
+            hash.Add((int)stage.Timer.Elapsed.TotalSeconds);
+        }
+
+        hash.Add(codexEntries.Count);
+        foreach (var entry in codexEntries)
+        {
+            hash.Add(entry.Endpoint, StringComparer.Ordinal);
+            hash.Add(entry.Message, StringComparer.Ordinal);
+            hash.Add(entry.Timestamp.ToUnixTimeSeconds());
+        }
+
+        return hash.ToHashCode();
+    }
+
+    private static IRenderable RenderProgressDisplay(
+        ProgressState state,
+        IReadOnlyList<(string Endpoint, DateTimeOffset Timestamp, string Message)>? codexEntries = null)
     {
         const int barWidth = 40;
         const int timestampWidth = 8;
@@ -809,7 +847,7 @@ internal static class Program
             rows.Add(new Text(""));
         }
 
-        var codexEntries = CodexLogBoard.Snapshot();
+        codexEntries ??= CodexLogBoard.Snapshot();
         if (codexEntries.Count > 0)
         {
             rows.Add(new Rule());

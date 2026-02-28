@@ -12,14 +12,18 @@ public sealed class CodexAppServerPool : IAsyncDisposable, IDisposable
     private static readonly TimeSpan StartupTimeout = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan StartupProbeInterval = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan ConnectAttemptTimeout = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan RestartRetryDelay = TimeSpan.FromSeconds(1);
 
-    private readonly List<Process> _processes;
+    private readonly Dictionary<string, Process> _processesByEndpoint = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _gate = new();
+    private readonly CancellationTokenSource _lifetimeCts = new();
+    private readonly string? _wslDistro;
     private bool _disposed;
 
-    private CodexAppServerPool(IReadOnlyList<string> endpoints, List<Process> processes)
+    private CodexAppServerPool(IReadOnlyList<string> endpoints, string? wslDistro)
     {
         Endpoints = endpoints;
-        _processes = processes;
+        _wslDistro = wslDistro;
     }
 
     public IReadOnlyList<string> Endpoints { get; }
@@ -38,26 +42,21 @@ public sealed class CodexAppServerPool : IAsyncDisposable, IDisposable
             throw new ArgumentOutOfRangeException(nameof(poolSize), "Pool size must be >= 1.");
 
         var endpoints = BuildEndpoints(baseEndpoint, poolSize);
-        var processes = new List<Process>(poolSize);
+        var pool = new CodexAppServerPool(endpoints, wslDistro);
 
         try
         {
             foreach (var endpoint in endpoints)
             {
-                var process = StartServer(endpoint, wslDistro);
-                processes.Add(process);
+                pool.StartAndTrackServer(endpoint);
             }
 
             await WaitForAllEndpointsAsync(endpoints, ct);
-            return new CodexAppServerPool(endpoints, processes);
+            return pool;
         }
         catch
         {
-            foreach (var process in processes)
-            {
-                TryKill(process);
-                process.Dispose();
-            }
+            pool.Dispose();
             throw;
         }
     }
@@ -72,12 +71,24 @@ public sealed class CodexAppServerPool : IAsyncDisposable, IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        _lifetimeCts.Cancel();
 
-        foreach (var process in _processes)
+        List<Process> processes;
+        lock (_gate)
+        {
+            processes = _processesByEndpoint.Values
+                .Distinct()
+                .ToList();
+            _processesByEndpoint.Clear();
+        }
+
+        foreach (var process in processes)
         {
             TryKill(process);
             process.Dispose();
         }
+
+        _lifetimeCts.Dispose();
     }
 
     public ValueTask DisposeAsync()
@@ -86,7 +97,19 @@ public sealed class CodexAppServerPool : IAsyncDisposable, IDisposable
         return ValueTask.CompletedTask;
     }
 
-    private static Process StartServer(string endpoint, string? wslDistro)
+    private void StartAndTrackServer(string endpoint)
+    {
+        var process = StartServer(endpoint, _wslDistro, OnProcessExited);
+        lock (_gate)
+        {
+            _processesByEndpoint[endpoint] = process;
+        }
+    }
+
+    private static Process StartServer(
+        string endpoint,
+        string? wslDistro,
+        Action<string, Process>? onExited = null)
     {
         var psi = BuildServerStartInfo(endpoint, wslDistro);
 
@@ -111,6 +134,7 @@ public sealed class CodexAppServerPool : IAsyncDisposable, IDisposable
             try
             {
                 CodexLogBoard.Report(endpoint, $"process exited ({process.ExitCode})");
+                onExited?.Invoke(endpoint, process);
             }
             catch
             {
@@ -125,6 +149,127 @@ public sealed class CodexAppServerPool : IAsyncDisposable, IDisposable
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
         return process;
+    }
+
+    private void OnProcessExited(string endpoint, Process exitedProcess)
+    {
+        _ = Task.Run(() => RestartEndpointLoopAsync(endpoint, exitedProcess));
+    }
+
+    private async Task RestartEndpointLoopAsync(string endpoint, Process exitedProcess)
+    {
+        try
+        {
+            for (var attempt = 1; ; attempt++)
+            {
+                if (!ShouldRestart(endpoint, exitedProcess))
+                {
+                    SafeDisposeProcess(exitedProcess);
+                    return;
+                }
+
+                if (_disposed)
+                {
+                    SafeDisposeProcess(exitedProcess);
+                    return;
+                }
+
+                Process? replacement = null;
+
+                try
+                {
+                    CodexLogBoard.Report(endpoint, $"restarting codex app-server (attempt {attempt})...");
+                    replacement = StartServer(endpoint, _wslDistro, OnProcessExited);
+
+                    lock (_gate)
+                    {
+                        if (_disposed)
+                        {
+                            TryKill(replacement);
+                            SafeDisposeProcess(replacement);
+                            SafeDisposeProcess(exitedProcess);
+                            return;
+                        }
+
+                        _processesByEndpoint[endpoint] = replacement;
+                    }
+
+                    await WaitForEndpointAsync(endpoint, _lifetimeCts.Token);
+                    SafeDisposeProcess(exitedProcess);
+                    CodexLogBoard.Report(endpoint, $"codex app-server restart complete (attempt {attempt})");
+                    return;
+                }
+                catch (OperationCanceledException) when (_disposed || _lifetimeCts.IsCancellationRequested)
+                {
+                    if (replacement is not null)
+                        DemoteFailedReplacement(endpoint, replacement, exitedProcess);
+                    SafeDisposeProcess(exitedProcess);
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    if (replacement is not null)
+                        DemoteFailedReplacement(endpoint, replacement, exitedProcess);
+
+                    CodexLogBoard.Report(endpoint, $"restart attempt {attempt} failed: {ex.Message}");
+                    try
+                    {
+                        await Task.Delay(RestartRetryDelay, _lifetimeCts.Token);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        SafeDisposeProcess(exitedProcess);
+                        return;
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // best-effort auto-restart loop
+        }
+    }
+
+    private void DemoteFailedReplacement(string endpoint, Process replacement, Process exitedProcess)
+    {
+        lock (_gate)
+        {
+            if (_processesByEndpoint.TryGetValue(endpoint, out var tracked) &&
+                ReferenceEquals(tracked, replacement))
+            {
+                _processesByEndpoint[endpoint] = exitedProcess;
+            }
+        }
+
+        TryKill(replacement);
+        SafeDisposeProcess(replacement);
+    }
+
+    private bool ShouldRestart(string endpoint, Process exitedProcess)
+    {
+        if (_disposed)
+            return false;
+
+        lock (_gate)
+        {
+            if (_disposed)
+                return false;
+
+            return _processesByEndpoint.TryGetValue(endpoint, out var tracked) &&
+                   ReferenceEquals(tracked, exitedProcess);
+        }
+    }
+
+    private static void SafeDisposeProcess(Process process)
+    {
+        try
+        {
+            process.Dispose();
+        }
+        catch
+        {
+            // best-effort cleanup
+        }
     }
 
     private static ProcessStartInfo BuildServerStartInfo(string endpoint, string? wslDistro)
