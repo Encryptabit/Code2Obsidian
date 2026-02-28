@@ -5,6 +5,8 @@ namespace Code2Obsidian.Incremental;
 /// <summary>
 /// Detects changed .cs files by comparing a stored commit SHA against the current
 /// HEAD and working tree using LibGit2Sharp.
+/// Ignores line-ending-only (.CRLF vs .LF) modifications to reduce false positives
+/// after cross-platform repo moves.
 /// Returns null if the path is not a git repository, allowing the caller to
 /// fall back to <see cref="HashChangeDetector"/>.
 /// </summary>
@@ -65,6 +67,11 @@ public sealed class GitChangeDetector : IChangeDetector
                 var change = MapChange(entry);
                 if (change is not null)
                 {
+                    if (change.Kind == FileChangeKind.Modified &&
+                        IsCrOnlyCommittedModification(oldCommit, headTip, entry))
+                    {
+                        continue;
+                    }
                     changesByPath[change.Path] = change;
                 }
             }
@@ -83,6 +90,11 @@ public sealed class GitChangeDetector : IChangeDetector
                 var change = MapChange(entry);
                 if (change is not null && !changesByPath.ContainsKey(change.Path))
                 {
+                    if (change.Kind == FileChangeKind.Modified &&
+                        IsCrOnlyWorkingModification(repo, headTip, entry))
+                    {
+                        continue;
+                    }
                     changesByPath[change.Path] = change;
                 }
             }
@@ -120,5 +132,70 @@ public sealed class GitChangeDetector : IChangeDetector
         var oldPath = kind == FileChangeKind.Renamed ? entry.OldPath : null;
 
         return new FileChange(path, oldPath, kind);
+    }
+
+    private static bool IsCrOnlyCommittedModification(Commit oldCommit, Commit newCommit, TreeEntryChanges entry)
+    {
+        if (entry.Status is not (ChangeKind.Modified or ChangeKind.TypeChanged))
+            return false;
+
+        var oldText = ReadCommitFileText(oldCommit, entry.OldPath ?? entry.Path);
+        var newText = ReadCommitFileText(newCommit, entry.Path);
+        if (oldText is null || newText is null)
+            return false;
+
+        return string.Equals(
+            NormalizeLineEndings(oldText),
+            NormalizeLineEndings(newText),
+            StringComparison.Ordinal);
+    }
+
+    private static bool IsCrOnlyWorkingModification(Repository repo, Commit headTip, TreeEntryChanges entry)
+    {
+        if (entry.Status is not (ChangeKind.Modified or ChangeKind.TypeChanged))
+            return false;
+
+        var headText = ReadCommitFileText(headTip, entry.Path);
+        if (headText is null)
+            return false;
+
+        var relativePath = entry.Path.Replace('/', Path.DirectorySeparatorChar);
+        var absolutePath = Path.Combine(repo.Info.WorkingDirectory, relativePath);
+        if (!File.Exists(absolutePath))
+            return false;
+
+        try
+        {
+            var workingText = File.ReadAllText(absolutePath);
+            return string.Equals(
+                NormalizeLineEndings(headText),
+                NormalizeLineEndings(workingText),
+                StringComparison.Ordinal);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string? ReadCommitFileText(Commit commit, string relativePath)
+    {
+        var entry = commit[relativePath];
+        if (entry?.Target is not Blob blob)
+            return null;
+
+        try
+        {
+            return blob.GetContentText();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string NormalizeLineEndings(string text)
+    {
+        return text.Replace("\r\n", "\n").Replace('\r', '\n');
     }
 }
