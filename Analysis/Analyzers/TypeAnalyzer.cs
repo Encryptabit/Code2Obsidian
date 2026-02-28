@@ -75,19 +75,25 @@ public sealed class TypeAnalyzer : IAnalyzer
                 if (_fileFilter is not null && !_fileFilter.Contains(document.FilePath!))
                     continue;
 
+                // Skip generated code files (obj/bin, *.g.cs, etc.)
+                if (AnalysisHelpers.IsGeneratedFilePath(document.FilePath!))
+                    continue;
+
                 var tree = await document.GetSyntaxTreeAsync(ct);
                 if (tree is null) continue;
 
                 var model = await document.GetSemanticModelAsync(ct);
                 if (model is null) continue;
 
+                var root = await tree.GetRootAsync(ct);
+                if (AnalysisHelpers.HasGeneratedFileHeader(root))
+                    continue;
+
                 progress?.Report(new PipelineProgress(
                     PipelineStage.Analyzing,
                     $"Analyzing types in {project.Name}/{Path.GetFileName(document.FilePath)}",
                     fileIndex,
                     totalFiles));
-
-                var root = await tree.GetRootAsync(ct);
 
                 foreach (var typeDecl in root.DescendantNodes().OfType<TypeDeclarationSyntax>())
                 {
