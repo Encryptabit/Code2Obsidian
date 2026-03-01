@@ -9,6 +9,16 @@ namespace Code2Obsidian.Incremental;
 /// </summary>
 public sealed class HashChangeDetector : IChangeDetector
 {
+    private static readonly string[] GeneratedFileSuffixes =
+    {
+        ".g.cs",
+        ".g.i.cs",
+        ".generated.cs",
+        ".designer.cs",
+        ".AssemblyInfo.cs",
+        ".AssemblyAttributes.cs"
+    };
+
     /// <inheritdoc />
     public ChangeSet? DetectChanges(string repoOrProjectPath, IncrementalState? priorState)
     {
@@ -34,6 +44,10 @@ public sealed class HashChangeDetector : IChangeDetector
             var relativePath = Path.IsPathRooted(path)
                 ? Path.GetRelativePath(repoOrProjectPath, path).Replace('\\', '/')
                 : path.Replace('\\', '/');
+
+            if (IsGeneratedFilePath(relativePath))
+                continue;
+
             normalizedHashes[relativePath] = hash;
         }
 
@@ -44,6 +58,10 @@ public sealed class HashChangeDetector : IChangeDetector
 
         foreach (var filePath in Directory.EnumerateFiles(repoOrProjectPath, "*.cs", SearchOption.AllDirectories))
         {
+            var normalizedFilePath = filePath.Replace('\\', '/');
+            if (IsGeneratedFilePath(normalizedFilePath))
+                continue;
+
             // Normalize to relative path for consistent comparison with stored hashes.
             var relativePath = Path.GetRelativePath(repoOrProjectPath, filePath)
                 .Replace('\\', '/');
@@ -75,6 +93,26 @@ public sealed class HashChangeDetector : IChangeDetector
         }
 
         return new ChangeSet(changes, CommitSha: null, IsFullRebuild: false);
+    }
+
+    private static bool IsGeneratedFilePath(string normalizedPath)
+    {
+        if (string.IsNullOrWhiteSpace(normalizedPath))
+            return false;
+
+        if (normalizedPath.Contains("/obj/", StringComparison.OrdinalIgnoreCase) ||
+            normalizedPath.Contains("/bin/", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        foreach (var suffix in GeneratedFileSuffixes)
+        {
+            if (normalizedPath.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
     }
 
     /// <summary>

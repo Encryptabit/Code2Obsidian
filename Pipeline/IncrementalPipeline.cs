@@ -26,6 +26,7 @@ public sealed class IncrementalPipeline
     private readonly int _fanInThreshold;
     private readonly int _complexityThreshold;
     private readonly IReadOnlyList<IEnricher> _enrichers;
+    private readonly string[]? _excludePatterns;
 
     public IncrementalPipeline(
         AnalysisContext context,
@@ -34,7 +35,8 @@ public sealed class IncrementalPipeline
         string stateDbPath,
         int fanInThreshold = 10,
         int complexityThreshold = 15,
-        IReadOnlyList<IEnricher>? enrichers = null)
+        IReadOnlyList<IEnricher>? enrichers = null,
+        string[]? excludePatterns = null)
     {
         _context = context;
         _progress = progress;
@@ -43,6 +45,7 @@ public sealed class IncrementalPipeline
         _fanInThreshold = fanInThreshold;
         _complexityThreshold = complexityThreshold;
         _enrichers = enrichers ?? new List<IEnricher>();
+        _excludePatterns = excludePatterns;
     }
 
     /// <summary>
@@ -53,7 +56,7 @@ public sealed class IncrementalPipeline
     public async Task<PipelineResult> RunFullWithStateSaveAsync(CancellationToken ct)
     {
         // Run full pipeline
-        var analyzers = new List<IAnalyzer> { new MethodAnalyzer(), new TypeAnalyzer() };
+        var analyzers = new List<IAnalyzer> { new MethodAnalyzer(null, _excludePatterns), new TypeAnalyzer(null, _excludePatterns) };
         var emitter = new ObsidianEmitter(_fanInThreshold, _complexityThreshold);
         var pipeline = new Pipeline(analyzers, _enrichers, emitter);
 
@@ -153,8 +156,8 @@ public sealed class IncrementalPipeline
         // Step 2: Pass 1 -- Analyze changed files only
         var pass1Analyzers = new List<IAnalyzer>
         {
-            new MethodAnalyzer(absoluteChangedFiles),
-            new TypeAnalyzer(absoluteChangedFiles)
+            new MethodAnalyzer(absoluteChangedFiles, _excludePatterns),
+            new TypeAnalyzer(absoluteChangedFiles, _excludePatterns)
         };
         var pass1Builder = new AnalysisResultBuilder();
         foreach (var analyzer in pass1Analyzers)
@@ -191,8 +194,8 @@ public sealed class IncrementalPipeline
 
             var pass2Analyzers = new List<IAnalyzer>
             {
-                new MethodAnalyzer(expandedFilter),
-                new TypeAnalyzer(expandedFilter)
+                new MethodAnalyzer(expandedFilter, _excludePatterns),
+                new TypeAnalyzer(expandedFilter, _excludePatterns)
             };
             var pass2Builder = new AnalysisResultBuilder();
             foreach (var analyzer in pass2Analyzers)
@@ -366,8 +369,8 @@ public sealed class IncrementalPipeline
         // Step 2: Analyze changed files for ripple computation
         var pass1Analyzers = new List<IAnalyzer>
         {
-            new MethodAnalyzer(absoluteChangedFiles),
-            new TypeAnalyzer(absoluteChangedFiles)
+            new MethodAnalyzer(absoluteChangedFiles, _excludePatterns),
+            new TypeAnalyzer(absoluteChangedFiles, _excludePatterns)
         };
         var pass1Builder = new AnalysisResultBuilder();
         foreach (var analyzer in pass1Analyzers)

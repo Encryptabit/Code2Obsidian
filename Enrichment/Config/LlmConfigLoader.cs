@@ -61,10 +61,24 @@ public static class LlmConfigLoader
                 normalizedEndpoints = null;
         }
 
+        string[]? normalizedExclude = null;
+        if (config.Exclude is { Length: > 0 })
+        {
+            normalizedExclude = config.Exclude
+                .Where(e => !string.IsNullOrWhiteSpace(e))
+                .Select(e => e.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            if (normalizedExclude.Length == 0)
+                normalizedExclude = null;
+        }
+
         config = config with
         {
             Endpoint = normalizedEndpoint,
-            Endpoints = normalizedEndpoints
+            Endpoints = normalizedEndpoints,
+            Exclude = normalizedExclude
         };
 
         return config;

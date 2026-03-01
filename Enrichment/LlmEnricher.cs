@@ -1,4 +1,5 @@
 ﻿using System.Net;
+using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using Code2Obsidian.Analysis;
@@ -34,8 +35,10 @@ public sealed class LlmEnricher : IEnricher
     private int _entitiesEnriched;
     private int _entitiesCached;
     private int _entitiesFailed;
+    private int _entitiesInFlight;
     private int _lastReportedCompleted = -1;
     private long _lastProgressTicks;
+    private readonly ConcurrentQueue<string> _failureWarnings = new();
 
     public LlmEnricher(
         IChatClient client,
@@ -90,6 +93,9 @@ public sealed class LlmEnricher : IEnricher
 
     /// <summary>Count of entities where the LLM call failed (logged and skipped).</summary>
     public int EntitiesFailed => Volatile.Read(ref _entitiesFailed);
+
+    /// <summary>Warnings for failed entities during this enricher run.</summary>
+    internal IReadOnlyCollection<string> FailureWarnings => _failureWarnings.ToArray();
 
     /// <summary>
     /// Enriches the analysis result with LLM-generated summaries for methods and types.
@@ -217,20 +223,37 @@ public sealed class LlmEnricher : IEnricher
             }
         }
 
-        // Phase 3: Process uncached methods in parallel with SemaphoreSlim gating
-        var methodTasks = uncachedMethods.Select(item => ProcessMethodAsync(
-            item.method, item.hash, item.existingWhatItDoes, systemPrompt,
-            analysis, enriched, semaphore, totalEntities, ct));
-        await Task.WhenAll(methodTasks);
+        using var heartbeatCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var heartbeatTask = RunProgressHeartbeatAsync(totalEntities, modeLabel, heartbeatCts.Token);
+        try
+        {
+            // Phase 3: Process uncached methods in parallel with SemaphoreSlim gating
+            var methodTasks = uncachedMethods.Select(item => ProcessMethodAsync(
+                item.method, item.hash, item.existingWhatItDoes, systemPrompt,
+                analysis, enriched, semaphore, totalEntities, ct));
+            await Task.WhenAll(methodTasks);
 
-        // Phase 4: Process uncached types in parallel with SemaphoreSlim gating
-        var typeTasks = uncachedTypes.Select(item => ProcessTypeAsync(
-            item.type, item.hash, item.existingWhatItDoes, systemPrompt,
-            analysis, enriched, semaphore, totalEntities, ct));
-        await Task.WhenAll(typeTasks);
+            // Phase 4: Process uncached types in parallel with SemaphoreSlim gating
+            var typeTasks = uncachedTypes.Select(item => ProcessTypeAsync(
+                item.type, item.hash, item.existingWhatItDoes, systemPrompt,
+                analysis, enriched, semaphore, totalEntities, ct));
+            await Task.WhenAll(typeTasks);
 
-        // Ensure all queued cache writes are committed before stage completion.
-        await _cache.FlushAsync(ct);
+            // Ensure all queued cache writes are committed before stage completion.
+            await _cache.FlushAsync(ct);
+        }
+        finally
+        {
+            heartbeatCts.Cancel();
+            try
+            {
+                await heartbeatTask;
+            }
+            catch (OperationCanceledException)
+            {
+                // expected on shutdown
+            }
+        }
 
         // Final progress report
         ReportProgress(
@@ -245,6 +268,7 @@ public sealed class LlmEnricher : IEnricher
         CancellationToken ct)
     {
         await semaphore.WaitAsync(ct);
+        Interlocked.Increment(ref _entitiesInFlight);
         try
         {
             var userPrompt = PromptBuilder.BuildMethodPrompt(
@@ -278,6 +302,7 @@ public sealed class LlmEnricher : IEnricher
             if (enrichmentResponse is null)
             {
                 Interlocked.Increment(ref _entitiesFailed);
+                _failureWarnings.Enqueue($"Failed method '{method.Name}': unable to parse response.");
                 ReportEntityProgress($"Failed method: {method.Name}", totalEntities);
                 return;
             }
@@ -287,6 +312,7 @@ public sealed class LlmEnricher : IEnricher
             if (!updateSummary && !updateSuggestions)
             {
                 Interlocked.Increment(ref _entitiesFailed);
+                _failureWarnings.Enqueue($"Failed method '{method.Name}': response did not include requested enrichment fields.");
                 ReportEntityProgress($"Failed method: {method.Name}", totalEntities);
                 return;
             }
@@ -309,12 +335,13 @@ public sealed class LlmEnricher : IEnricher
         catch (Exception ex)
         {
             // Per Pitfall 5: single entity failure does not abort the run
-            Console.Error.WriteLine($"[LlmEnricher] Warning: Failed to enrich method '{method.Name}': {ex.Message}");
             Interlocked.Increment(ref _entitiesFailed);
+            _failureWarnings.Enqueue($"Failed to enrich method '{method.Name}': {ex.Message}");
             ReportEntityProgress($"Failed method: {method.Name}", totalEntities);
         }
         finally
         {
+            Interlocked.Decrement(ref _entitiesInFlight);
             semaphore.Release();
         }
     }
@@ -325,6 +352,7 @@ public sealed class LlmEnricher : IEnricher
         CancellationToken ct)
     {
         await semaphore.WaitAsync(ct);
+        Interlocked.Increment(ref _entitiesInFlight);
         try
         {
             var userPrompt = PromptBuilder.BuildTypePrompt(
@@ -358,6 +386,7 @@ public sealed class LlmEnricher : IEnricher
             if (enrichmentResponse is null)
             {
                 Interlocked.Increment(ref _entitiesFailed);
+                _failureWarnings.Enqueue($"Failed type '{type.Name}': unable to parse response.");
                 ReportEntityProgress($"Failed type: {type.Name}", totalEntities);
                 return;
             }
@@ -367,6 +396,7 @@ public sealed class LlmEnricher : IEnricher
             if (!updateSummary && !updateSuggestions)
             {
                 Interlocked.Increment(ref _entitiesFailed);
+                _failureWarnings.Enqueue($"Failed type '{type.Name}': response did not include requested enrichment fields.");
                 ReportEntityProgress($"Failed type: {type.Name}", totalEntities);
                 return;
             }
@@ -388,12 +418,13 @@ public sealed class LlmEnricher : IEnricher
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[LlmEnricher] Warning: Failed to enrich type '{type.Name}': {ex.Message}");
             Interlocked.Increment(ref _entitiesFailed);
+            _failureWarnings.Enqueue($"Failed to enrich type '{type.Name}': {ex.Message}");
             ReportEntityProgress($"Failed type: {type.Name}", totalEntities);
         }
         finally
         {
+            Interlocked.Decrement(ref _entitiesInFlight);
             semaphore.Release();
         }
     }
@@ -505,6 +536,25 @@ public sealed class LlmEnricher : IEnricher
     {
         var completed = EntitiesCached + EntitiesEnriched + EntitiesFailed;
         ReportProgress(description, completed, total);
+    }
+
+    private async Task RunProgressHeartbeatAsync(int total, string modeLabel, CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            var completed = EntitiesCached + EntitiesEnriched + EntitiesFailed;
+            if (completed >= total)
+                return;
+
+            var pending = Math.Max(0, total - completed);
+            var inFlight = Volatile.Read(ref _entitiesInFlight);
+            ReportProgress(
+                $"LLM {modeLabel}: {completed}/{total} complete, {pending} pending, {inFlight} in-flight",
+                completed,
+                total);
+
+            await Task.Delay(TimeSpan.FromSeconds(2), ct);
+        }
     }
 
     private void ReportProgress(string description, int current, int total, bool force = false)

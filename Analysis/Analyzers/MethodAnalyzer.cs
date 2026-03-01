@@ -3,6 +3,7 @@ using Code2Obsidian.Loading;
 using Code2Obsidian.Pipeline;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.Extensions.FileSystemGlobbing;
 
 namespace Code2Obsidian.Analysis.Analyzers;
 
@@ -19,13 +20,14 @@ namespace Code2Obsidian.Analysis.Analyzers;
 public sealed class MethodAnalyzer : IAnalyzer
 {
     private readonly IReadOnlySet<string>? _fileFilter;
+    private readonly Matcher? _excludeMatcher;
 
     public string Name => "MethodAnalyzer";
 
     /// <summary>
     /// Creates a MethodAnalyzer that analyzes all documents (full analysis mode).
     /// </summary>
-    public MethodAnalyzer() : this(null)
+    public MethodAnalyzer() : this(null, null)
     {
     }
 
@@ -33,14 +35,23 @@ public sealed class MethodAnalyzer : IAnalyzer
     /// Creates a MethodAnalyzer with an optional file filter for incremental mode.
     /// When fileFilter is non-null, only documents whose FilePath is in the filter are analyzed.
     /// The filter should use StringComparer.OrdinalIgnoreCase for case-insensitive path matching.
+    /// When excludePatterns is non-null, documents matching any glob pattern are skipped.
     /// </summary>
-    public MethodAnalyzer(IReadOnlySet<string>? fileFilter)
+    public MethodAnalyzer(IReadOnlySet<string>? fileFilter, string[]? excludePatterns = null)
     {
         _fileFilter = fileFilter;
+
+        if (excludePatterns is { Length: > 0 })
+        {
+            _excludeMatcher = new Matcher();
+            _excludeMatcher.AddIncludePatterns(excludePatterns);
+        }
     }
 
     public async Task AnalyzeAsync(AnalysisContext context, AnalysisResultBuilder builder, IProgress<PipelineProgress>? progress, CancellationToken ct)
     {
+        var solutionRoot = Path.GetDirectoryName(context.Solution.FilePath) ?? Directory.GetCurrentDirectory();
+
         var csharpProjects = context.Solution.Projects
             .Where(p => p.Language == LanguageNames.CSharp)
             .ToList();
@@ -77,6 +88,14 @@ public sealed class MethodAnalyzer : IAnalyzer
                 // Skip unchanged files in incremental mode
                 if (_fileFilter is not null && !_fileFilter.Contains(document.FilePath!))
                     continue;
+
+                // Skip files matching exclude glob patterns
+                if (_excludeMatcher is not null)
+                {
+                    var normalizedPath = document.FilePath!.Replace('\\', '/');
+                    if (_excludeMatcher.Match(solutionRoot, normalizedPath).HasMatches)
+                        continue;
+                }
 
                 // Skip generated code files (obj/bin, *.g.cs, etc.)
                 if (AnalysisHelpers.IsGeneratedFilePath(document.FilePath!))

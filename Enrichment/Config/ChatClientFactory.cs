@@ -30,9 +30,15 @@ public static class ChatClientFactory
     /// Thrown when the API key env var was not resolved, or when an unknown provider
     /// has no endpoint configured.
     /// </exception>
-    public static IChatClient CreateFromConfig(LlmConfig config)
+    public static IChatClient CreateFromConfig(
+        LlmConfig config,
+        Action<Uri, string>? codexEndpointUnavailable = null,
+        string? solutionDirectory = null)
     {
         var apiKey = ResolveApiKey(config);
+
+        if (config.Provider.Equals("codex", StringComparison.OrdinalIgnoreCase))
+            return CreateCodexClient(config, apiKey, codexEndpointUnavailable, solutionDirectory);
 
         if (KnownProviders.TryGetValue(config.Provider, out var factory))
         {
@@ -89,17 +95,38 @@ public static class ChatClientFactory
         return client.GetChatClient(config.Model).AsIChatClient();
     }
 
-    private static IChatClient CreateCodexClient(LlmConfig config, string _)
+    private static IChatClient CreateCodexClient(LlmConfig config, string _) =>
+        CreateCodexClient(config, _, null, null);
+
+    private static IChatClient CreateCodexClient(
+        LlmConfig config,
+        string _,
+        Action<Uri, string>? onEndpointUnavailable,
+        string? cwd)
     {
         var endpointUris = ResolveCodexEndpoints(config)
             .Select(endpoint => new Uri(endpoint))
             .ToArray();
 
         if (endpointUris.Length == 1)
-            return new CodexChatClient(endpointUris[0], config.Model, traceWs: config.TraceCodexWs);
+        {
+            return new CodexChatClient(
+                endpointUris[0],
+                config.Model,
+                traceWs: config.TraceCodexWs,
+                onEndpointUnavailable: onEndpointUnavailable,
+                reasoningEffort: config.ReasoningEffort,
+                cwd: cwd);
+        }
 
         var pooledClients = endpointUris
-            .Select(uri => (IChatClient)new CodexChatClient(uri, config.Model, traceWs: config.TraceCodexWs))
+            .Select(uri => (IChatClient)new CodexChatClient(
+                uri,
+                config.Model,
+                traceWs: config.TraceCodexWs,
+                onEndpointUnavailable: onEndpointUnavailable,
+                reasoningEffort: config.ReasoningEffort,
+                cwd: cwd))
             .ToArray();
         return new RoundRobinChatClient(pooledClients);
     }

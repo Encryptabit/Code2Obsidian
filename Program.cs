@@ -115,6 +115,11 @@ internal static class Program
             Description = "Print Codex websocket frame traces (works with pooled endpoints)"
         };
 
+        var excludeOption = new Option<string?>("--exclude")
+        {
+            Description = "Comma/semicolon-separated glob patterns for file paths to exclude from analysis"
+        };
+
         var rootCommand = new RootCommand("Analyze a C# solution and generate an Obsidian vault")
         {
             inputArgument,
@@ -133,7 +138,8 @@ internal static class Program
             llmEndpointOption,
             codexWslDistroOption,
             poolSizeOption,
-            traceCodexWsOption
+            traceCodexWsOption,
+            excludeOption
         };
 
         rootCommand.SetAction(async (parseResult, cancellationToken) =>
@@ -161,10 +167,11 @@ internal static class Program
             var codexWslDistro = parseResult.GetValue(codexWslDistroOption);
             var poolSize = parseResult.GetValue(poolSizeOption);
             var traceCodexWs = parseResult.GetValue(traceCodexWsOption);
+            var excludeRaw = parseResult.GetValue(excludeOption);
 
             return await RunPipelineAsync(input, output, fanInThreshold, complexityThreshold,
                 incremental, fullRebuild, dryRun, enrich, suggestions, llmProvider, llmModel, llmApiKey, llmEndpoint,
-                codexWslDistro, poolSize, traceCodexWs,
+                codexWslDistro, poolSize, traceCodexWs, excludeRaw,
                 cancellationToken);
         });
 
@@ -176,7 +183,7 @@ internal static class Program
         string input, string? output, int fanInThreshold, int complexityThreshold,
         bool incremental, bool fullRebuild, bool dryRun,
         bool enrich, bool suggestions, string? llmProvider, string? llmModel, string? llmApiKey, string? llmEndpoint,
-        string? codexWslDistro, int? poolSize, bool traceCodexWs,
+        string? codexWslDistro, int? poolSize, bool traceCodexWs, string? excludeRaw,
         CancellationToken ct)
     {
         CodexAppServerPool? codexPool = null;
@@ -207,6 +214,16 @@ internal static class Program
             AnsiConsole.WriteLine();
 
             using var context = await loader.LoadAsync(solutionPath, ct);
+
+            // Parse CLI exclude patterns and merge with config file exclude patterns
+            var cliExclude = ParseExcludePatterns(excludeRaw);
+            string[]? configExclude = null;
+            {
+                var configPathForExclude = Path.Combine(Path.GetDirectoryName(solutionPath)!, "code2obsidian.llm.json");
+                var excludeConfig = LlmConfigLoader.TryLoad(configPathForExclude);
+                configExclude = excludeConfig?.Exclude;
+            }
+            var excludePatterns = MergeExcludePatterns(configExclude, cliExclude);
 
             // Set up enrichment if --enrich is passed
             var enrichers = new List<IEnricher>();
@@ -308,7 +325,8 @@ internal static class Program
                             poolSize.Value,
                             baseEndpoint,
                             codexWslDistro,
-                            ct);
+                            ct,
+                            workingDirectory: Path.GetDirectoryName(solutionPath));
                     }
                     catch (Exception ex)
                     {
@@ -391,9 +409,23 @@ internal static class Program
 
                 // Create IChatClient
                 IChatClient client;
+                Action<Uri, string>? codexEndpointUnavailable = null;
+                if (codexPool is not null &&
+                    config.Provider.Equals("codex", StringComparison.OrdinalIgnoreCase))
+                {
+                    codexEndpointUnavailable = (endpoint, reason) =>
+                    {
+                        var restarted = codexPool.RequestRestart(endpoint.ToString(), reason);
+                        if (!restarted)
+                        {
+                            CodexLogBoard.Report(endpoint.ToString(), $"restart request ignored ({reason})");
+                        }
+                    };
+                }
                 try
                 {
-                    client = ChatClientFactory.CreateFromConfig(config);
+                    client = ChatClientFactory.CreateFromConfig(config, codexEndpointUnavailable,
+                        solutionDirectory: Path.GetDirectoryName(solutionPath));
                 }
                 catch (InvalidOperationException ex)
                 {
@@ -455,7 +487,7 @@ internal static class Program
                         liveLlm = llm;
                         var incPipeline = new IncrementalPipeline(
                             context, progress, outputDir, stateDbPath, fanInThreshold, complexityThreshold,
-                            enrichers: incEnrichers);
+                            enrichers: incEnrichers, excludePatterns: excludePatterns);
                         return await incPipeline.RunFullWithStateSaveAsync(ct);
                     });
                     CopyEnrichmentMetrics(result, liveLlm);
@@ -479,7 +511,8 @@ internal static class Program
                     result = await RunWithProgress(async progress =>
                     {
                         var incPipeline = new IncrementalPipeline(
-                            context, progress, outputDir, stateDbPath, fanInThreshold, complexityThreshold);
+                            context, progress, outputDir, stateDbPath, fanInThreshold, complexityThreshold,
+                            excludePatterns: excludePatterns);
                         return await incPipeline.RunDryRunAsync(state, ct);
                     });
                     result.WasIncremental = true;
@@ -498,7 +531,7 @@ internal static class Program
                             liveLlmB = llm;
                             var incPipeline = new IncrementalPipeline(
                                 context, progress, outputDir, stateDbPath, fanInThreshold, complexityThreshold,
-                                enrichers: incEnrichers);
+                                enrichers: incEnrichers, excludePatterns: excludePatterns);
                             return await incPipeline.RunFullWithStateSaveAsync(ct);
                         });
                         CopyEnrichmentMetrics(result, liveLlmB);
@@ -514,7 +547,7 @@ internal static class Program
                             liveLlmC = llm;
                             var incPipeline = new IncrementalPipeline(
                                 context, progress, outputDir, stateDbPath, fanInThreshold, complexityThreshold,
-                                enrichers: incEnrichers);
+                                enrichers: incEnrichers, excludePatterns: excludePatterns);
                             return await incPipeline.RunIncrementalAsync(state, ct);
                         });
                         CopyEnrichmentMetrics(result, liveLlmC);
@@ -527,7 +560,7 @@ internal static class Program
             else
             {
                 // Case A: --no-incremental (and no incremental-only flags) -> full analysis via existing Pipeline (no state)
-                result = await RunFullPipeline(context, outputDir, fanInThreshold, complexityThreshold, enrichers, ct);
+                result = await RunFullPipeline(context, outputDir, fanInThreshold, complexityThreshold, enrichers, excludePatterns, ct);
             }
 
             // Add loader diagnostics as warnings BEFORE rendering
@@ -647,6 +680,10 @@ internal static class Program
         result.EntitiesFailed = llm.EntitiesFailed;
         result.InputTokensUsed = llm.InputTokensUsed;
         result.OutputTokensUsed = llm.OutputTokensUsed;
+        foreach (var warning in llm.FailureWarnings)
+        {
+            result.Warnings.Add($"[enrichment] {warning}");
+        }
     }
 
     /// <summary>
@@ -654,9 +691,9 @@ internal static class Program
     /// </summary>
     private static async Task<PipelineResult> RunFullPipeline(
         AnalysisContext context, string outputDir, int fanInThreshold, int complexityThreshold,
-        List<IEnricher> enrichers, CancellationToken ct)
+        List<IEnricher> enrichers, string[]? excludePatterns, CancellationToken ct)
     {
-        var analyzers = new List<IAnalyzer> { new MethodAnalyzer(), new TypeAnalyzer() };
+        var analyzers = new List<IAnalyzer> { new MethodAnalyzer(null, excludePatterns), new TypeAnalyzer(null, excludePatterns) };
         var emitter = new ObsidianEmitter(fanInThreshold, complexityThreshold);
 
         LlmEnricher? liveLlm = null;
@@ -823,7 +860,29 @@ internal static class Program
         const int maxMessageWidth = 140;
         var rows = new List<IRenderable>();
 
+        var activeStageIndex = -1;
         for (var i = 0; i < state.Stages.Length; i++)
+        {
+            var stage = state.Stages[i];
+            if (stage.Total > 0 && stage.Current < stage.Total)
+            {
+                activeStageIndex = i;
+                break;
+            }
+        }
+
+        var allCompletedLastStage = -1;
+        for (var i = 0; i < state.Stages.Length; i++)
+        {
+            if (state.Stages[i].Total > 0)
+                allCompletedLastStage = i;
+        }
+
+        var startStageIndex = activeStageIndex >= 0
+            ? activeStageIndex
+            : allCompletedLastStage;
+
+        for (var i = startStageIndex; i >= 0 && i < state.Stages.Length; i++)
         {
             var stage = state.Stages[i];
             if (stage.Total <= 0) continue;
@@ -954,6 +1013,36 @@ internal static class Program
             return (split[0], null);
 
         return (split[0], split);
+    }
+
+    private static string[]? ParseExcludePatterns(string? rawExcludeInput)
+    {
+        if (string.IsNullOrWhiteSpace(rawExcludeInput))
+            return null;
+
+        var split = rawExcludeInput
+            .Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        return split.Length == 0 ? null : split;
+    }
+
+    private static string[]? MergeExcludePatterns(string[]? configExclude, string[]? cliExclude)
+    {
+        if (configExclude is null && cliExclude is null)
+            return null;
+
+        var merged = new List<string>();
+        if (configExclude is not null) merged.AddRange(configExclude);
+        if (cliExclude is not null) merged.AddRange(cliExclude);
+
+        var result = merged
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        return result.Length == 0 ? null : result;
     }
 
     private static string ResolveCodexPoolBaseEndpoint(LlmConfig config)

@@ -48,7 +48,10 @@ public sealed class CodexChatClient : IChatClient, IDisposable
 
     private readonly Uri _endpoint;
     private readonly string _model;
+    private readonly string? _reasoningEffort;
+    private readonly string? _cwd;
     private readonly bool _traceWs;
+    private readonly Action<Uri, string>? _onEndpointUnavailable;
     private readonly SemaphoreSlim _turnLock = new(1, 1);
 
     private ClientWebSocket? _ws;
@@ -56,11 +59,20 @@ public sealed class CodexChatClient : IChatClient, IDisposable
     private bool _disposed;
     private bool _initialized;
 
-    public CodexChatClient(Uri endpoint, string model, bool traceWs = false)
+    public CodexChatClient(
+        Uri endpoint,
+        string model,
+        bool traceWs = false,
+        Action<Uri, string>? onEndpointUnavailable = null,
+        string? reasoningEffort = null,
+        string? cwd = null)
     {
         _endpoint = endpoint;
         _model = model;
+        _reasoningEffort = reasoningEffort;
+        _cwd = cwd;
         _traceWs = traceWs;
+        _onEndpointUnavailable = onEndpointUnavailable;
     }
 
     public ChatClientMetadata Metadata => new("codex", _endpoint, _model);
@@ -73,31 +85,16 @@ public sealed class CodexChatClient : IChatClient, IDisposable
         await _turnLock.WaitAsync(cancellationToken);
         try
         {
-            Exception? lastFailure = null;
-            for (var attempt = 1; attempt <= 2; attempt++)
-            {
-                try
-                {
-                    return await GetResponseInternalAsync(chatMessages, cancellationToken);
-                }
-                catch (TimeoutException ex) when (attempt < 2)
-                {
-                    lastFailure = ex;
-                    ResetConnection();
-                }
-                catch (WebSocketException ex) when (attempt < 2)
-                {
-                    lastFailure = ex;
-                    ResetConnection();
-                }
-                catch (InvalidOperationException ex) when (attempt < 2)
-                {
-                    lastFailure = ex;
-                    ResetConnection();
-                }
-            }
-
-            throw lastFailure ?? new InvalidOperationException("Codex turn failed after retry.");
+            return await GetResponseInternalAsync(chatMessages, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            ReportEndpointUnavailable(ex);
+            throw;
         }
         finally
         {
@@ -134,30 +131,33 @@ public sealed class CodexChatClient : IChatClient, IDisposable
         IEnumerable<ChatMessage> chatMessages,
         CancellationToken cancellationToken)
     {
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(TurnTimeout);
-        var turnToken = timeoutCts.Token;
+        using var startupCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        startupCts.CancelAfter(TurnTimeout);
+        var startupToken = startupCts.Token;
 
         try
         {
-            await EnsureConnectedAsync(turnToken);
+            await EnsureConnectedAsync(startupToken);
 
             // Build input as array of content objects per Codex protocol
             var inputArray = BuildInputArray(chatMessages);
-            var threadId = await StartThreadAsync(turnToken);
+            var threadId = await StartThreadAsync(startupToken);
 
             // Send turn/start (thread is fresh for this request)
             var turnId = NextId();
+            var turnParams = new JsonObject
+            {
+                ["threadId"] = threadId,
+                ["input"] = inputArray
+            };
+            if (!string.IsNullOrWhiteSpace(_reasoningEffort))
+                turnParams["effort"] = _reasoningEffort;
             await SendAsync(new JsonObject
             {
                 ["id"] = turnId,
                 ["method"] = "turn/start",
-                ["params"] = new JsonObject
-                {
-                    ["threadId"] = threadId,
-                    ["input"] = inputArray
-                }
-            }, turnToken);
+                ["params"] = turnParams
+            }, startupToken);
 
             // Collect response
             var textBuilder = new StringBuilder();
@@ -167,7 +167,9 @@ public sealed class CodexChatClient : IChatClient, IDisposable
 
             while (!turnCompleted)
             {
-                var msg = await ReceiveAsync(turnToken);
+                using var receiveCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                receiveCts.CancelAfter(TurnTimeout);
+                var msg = await ReceiveAsync(receiveCts.Token);
                 if (msg is null)
                     throw new InvalidOperationException("WebSocket closed before turn/completed.");
 
@@ -204,6 +206,8 @@ public sealed class CodexChatClient : IChatClient, IDisposable
                         var approvalId = msg["id"];
                         if (approvalId is not null)
                         {
+                            using var replyCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                            replyCts.CancelAfter(TurnTimeout);
                             await SendAsync(new JsonObject
                             {
                                 ["id"] = approvalId.DeepClone(),
@@ -212,7 +216,7 @@ public sealed class CodexChatClient : IChatClient, IDisposable
                                     ["approved"] = false,
                                     ["reason"] = "Code2Obsidian enrichment - text only"
                                 }
-                            }, turnToken);
+                            }, replyCts.Token);
                         }
                         break;
 
@@ -241,7 +245,8 @@ public sealed class CodexChatClient : IChatClient, IDisposable
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            throw new TimeoutException($"Codex turn timed out after {TurnTimeout.TotalMinutes:0} minutes.");
+            throw new TimeoutException(
+                $"Codex endpoint produced no activity for {TurnTimeout.TotalMinutes:0} minutes.");
         }
     }
 
@@ -293,15 +298,18 @@ public sealed class CodexChatClient : IChatClient, IDisposable
     private async Task<string> StartThreadAsync(CancellationToken ct)
     {
         var threadStartId = NextId();
+        var threadParams = new JsonObject
+        {
+            ["model"] = _model,
+            ["approvalPolicy"] = "never"
+        };
+        if (!string.IsNullOrWhiteSpace(_cwd))
+            threadParams["cwd"] = _cwd;
         await SendAsync(new JsonObject
         {
             ["id"] = threadStartId,
             ["method"] = "thread/start",
-            ["params"] = new JsonObject
-            {
-                ["model"] = _model,
-                ["approvalPolicy"] = "never"
-            }
+            ["params"] = threadParams
         }, ct);
 
         var threadResponse = await WaitForResponseAsync(threadStartId, ct);
@@ -555,5 +563,40 @@ public sealed class CodexChatClient : IChatClient, IDisposable
     {
         var raw = Environment.GetEnvironmentVariable(name);
         return int.TryParse(raw, out var parsed) && parsed > 0 ? parsed : fallback;
+    }
+
+    private void ReportEndpointUnavailable(Exception ex)
+    {
+        var reason = ClassifyEndpointFailure(ex);
+        if (reason is null)
+            return;
+
+        var endpointText = _endpoint.ToString();
+        try
+        {
+            CodexLogBoard.Report(endpointText, $"endpoint unavailable ({reason}): {ex.Message}");
+            _onEndpointUnavailable?.Invoke(_endpoint, $"{reason}: {ex.Message}");
+        }
+        catch
+        {
+            // best-effort reporting
+        }
+    }
+
+    private static string? ClassifyEndpointFailure(Exception ex)
+    {
+        if (ex is TimeoutException)
+            return "unresponsive";
+
+        if (ex is WebSocketException)
+            return "offline";
+
+        if (ex is InvalidOperationException invalid &&
+            invalid.Message.Contains("WebSocket closed", StringComparison.OrdinalIgnoreCase))
+        {
+            return "offline";
+        }
+
+        return null;
     }
 }

@@ -13,17 +13,21 @@ public sealed class CodexAppServerPool : IAsyncDisposable, IDisposable
     private static readonly TimeSpan StartupProbeInterval = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan ConnectAttemptTimeout = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan RestartRetryDelay = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan ForcedRestartThrottle = TimeSpan.FromSeconds(2);
 
     private readonly Dictionary<string, Process> _processesByEndpoint = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, DateTimeOffset> _lastForcedRestartByEndpoint = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _gate = new();
     private readonly CancellationTokenSource _lifetimeCts = new();
     private readonly string? _wslDistro;
+    private readonly string? _workingDirectory;
     private bool _disposed;
 
-    private CodexAppServerPool(IReadOnlyList<string> endpoints, string? wslDistro)
+    private CodexAppServerPool(IReadOnlyList<string> endpoints, string? wslDistro, string? workingDirectory)
     {
         Endpoints = endpoints;
         _wslDistro = wslDistro;
+        _workingDirectory = workingDirectory;
     }
 
     public IReadOnlyList<string> Endpoints { get; }
@@ -36,13 +40,14 @@ public sealed class CodexAppServerPool : IAsyncDisposable, IDisposable
         int poolSize,
         string baseEndpoint,
         string? wslDistro,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? workingDirectory = null)
     {
         if (poolSize < 1)
             throw new ArgumentOutOfRangeException(nameof(poolSize), "Pool size must be >= 1.");
 
         var endpoints = BuildEndpoints(baseEndpoint, poolSize);
-        var pool = new CodexAppServerPool(endpoints, wslDistro);
+        var pool = new CodexAppServerPool(endpoints, wslDistro, workingDirectory);
 
         try
         {
@@ -97,9 +102,56 @@ public sealed class CodexAppServerPool : IAsyncDisposable, IDisposable
         return ValueTask.CompletedTask;
     }
 
+    /// <summary>
+    /// Requests a forced restart of a managed endpoint process.
+    /// Returns false when the endpoint is not currently tracked by this pool.
+    /// </summary>
+    public bool RequestRestart(string endpoint, string reason)
+    {
+        if (string.IsNullOrWhiteSpace(endpoint))
+            return false;
+
+        Process? process;
+        string? matchedEndpoint;
+        var normalized = NormalizeEndpoint(endpoint);
+        var alternate = endpoint.Trim();
+        var now = DateTimeOffset.UtcNow;
+
+        lock (_gate)
+        {
+            if (_disposed)
+                return false;
+
+            if (_processesByEndpoint.TryGetValue(normalized, out process))
+            {
+                matchedEndpoint = normalized;
+            }
+            else if (_processesByEndpoint.TryGetValue(alternate, out process))
+            {
+                matchedEndpoint = alternate;
+            }
+            else
+            {
+                return false;
+            }
+
+            if (_lastForcedRestartByEndpoint.TryGetValue(matchedEndpoint, out var last) &&
+                now - last < ForcedRestartThrottle)
+            {
+                return false;
+            }
+
+            _lastForcedRestartByEndpoint[matchedEndpoint] = now;
+        }
+
+        CodexLogBoard.Report(matchedEndpoint, $"restart requested ({reason})");
+        TryKill(process);
+        return true;
+    }
+
     private void StartAndTrackServer(string endpoint)
     {
-        var process = StartServer(endpoint, _wslDistro, OnProcessExited);
+        var process = StartServer(endpoint, _wslDistro, OnProcessExited, _workingDirectory);
         lock (_gate)
         {
             _processesByEndpoint[endpoint] = process;
@@ -109,9 +161,12 @@ public sealed class CodexAppServerPool : IAsyncDisposable, IDisposable
     private static Process StartServer(
         string endpoint,
         string? wslDistro,
-        Action<string, Process>? onExited = null)
+        Action<string, Process>? onExited = null,
+        string? workingDirectory = null)
     {
         var psi = BuildServerStartInfo(endpoint, wslDistro);
+        if (!string.IsNullOrWhiteSpace(workingDirectory))
+            psi.WorkingDirectory = workingDirectory;
 
         var process = new Process
         {
@@ -179,7 +234,7 @@ public sealed class CodexAppServerPool : IAsyncDisposable, IDisposable
                 try
                 {
                     CodexLogBoard.Report(endpoint, $"restarting codex app-server (attempt {attempt})...");
-                    replacement = StartServer(endpoint, _wslDistro, OnProcessExited);
+                    replacement = StartServer(endpoint, _wslDistro, OnProcessExited, _workingDirectory);
 
                     lock (_gate)
                     {
@@ -336,6 +391,11 @@ public sealed class CodexAppServerPool : IAsyncDisposable, IDisposable
     private static string BashSingleQuote(string value)
     {
         return "'" + value.Replace("'", "'\"'\"'") + "'";
+    }
+
+    private static string NormalizeEndpoint(string endpoint)
+    {
+        return endpoint.Trim().TrimEnd('/');
     }
 
     private static IReadOnlyList<string> BuildEndpoints(string baseEndpoint, int poolSize)

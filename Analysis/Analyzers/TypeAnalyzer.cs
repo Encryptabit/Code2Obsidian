@@ -3,6 +3,7 @@ using Code2Obsidian.Loading;
 using Code2Obsidian.Pipeline;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.Extensions.FileSystemGlobbing;
 using TypeInfo = Code2Obsidian.Analysis.Models.TypeInfo;
 
 namespace Code2Obsidian.Analysis.Analyzers;
@@ -15,13 +16,14 @@ namespace Code2Obsidian.Analysis.Analyzers;
 public sealed class TypeAnalyzer : IAnalyzer
 {
     private readonly IReadOnlySet<string>? _fileFilter;
+    private readonly Matcher? _excludeMatcher;
 
     public string Name => "TypeAnalyzer";
 
     /// <summary>
     /// Creates a TypeAnalyzer that analyzes all documents (full analysis mode).
     /// </summary>
-    public TypeAnalyzer() : this(null)
+    public TypeAnalyzer() : this(null, null)
     {
     }
 
@@ -29,10 +31,17 @@ public sealed class TypeAnalyzer : IAnalyzer
     /// Creates a TypeAnalyzer with an optional file filter for incremental mode.
     /// When fileFilter is non-null, only documents whose FilePath is in the filter are analyzed.
     /// The filter should use StringComparer.OrdinalIgnoreCase for case-insensitive path matching.
+    /// When excludePatterns is non-null, documents matching any glob pattern are skipped.
     /// </summary>
-    public TypeAnalyzer(IReadOnlySet<string>? fileFilter)
+    public TypeAnalyzer(IReadOnlySet<string>? fileFilter, string[]? excludePatterns = null)
     {
         _fileFilter = fileFilter;
+
+        if (excludePatterns is { Length: > 0 })
+        {
+            _excludeMatcher = new Matcher();
+            _excludeMatcher.AddIncludePatterns(excludePatterns);
+        }
     }
 
     public async Task AnalyzeAsync(
@@ -41,6 +50,8 @@ public sealed class TypeAnalyzer : IAnalyzer
         IProgress<PipelineProgress>? progress,
         CancellationToken ct)
     {
+        var solutionRoot = Path.GetDirectoryName(context.Solution.FilePath) ?? Directory.GetCurrentDirectory();
+
         var csharpProjects = context.Solution.Projects
             .Where(p => p.Language == LanguageNames.CSharp)
             .ToList();
@@ -74,6 +85,14 @@ public sealed class TypeAnalyzer : IAnalyzer
                 // Skip unchanged files in incremental mode
                 if (_fileFilter is not null && !_fileFilter.Contains(document.FilePath!))
                     continue;
+
+                // Skip files matching exclude glob patterns
+                if (_excludeMatcher is not null)
+                {
+                    var normalizedPath = document.FilePath!.Replace('\\', '/');
+                    if (_excludeMatcher.Match(solutionRoot, normalizedPath).HasMatches)
+                        continue;
+                }
 
                 // Skip generated code files (obj/bin, *.g.cs, etc.)
                 if (AnalysisHelpers.IsGeneratedFilePath(document.FilePath!))
