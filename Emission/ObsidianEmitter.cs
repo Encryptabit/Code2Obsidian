@@ -338,22 +338,8 @@ public sealed class ObsidianEmitter : IEmitter
             sb.AppendLine();
         }
 
-        // LLM-generated summary (only when enrichment provides one)
-        if (includeSummary && enrichment is not null && HasSummaryContent(enrichment))
-        {
-            sb.AppendLine("## Summary");
-            if (!string.IsNullOrWhiteSpace(enrichment.Purpose))
-            {
-                sb.AppendLine($"**{enrichment.Purpose}**");
-                sb.AppendLine();
-            }
-            if (!string.IsNullOrWhiteSpace(enrichment.Summary))
-                sb.AppendLine(enrichment.Summary);
-            sb.AppendLine();
-        }
-
         // Method section (signature, doc, calls)
-        sb.Append(RenderMethodSection(method, analysis, collisionSet, overloadIndex, enrichment, includeSuggestions));
+        sb.Append(RenderMethodSection(method, analysis, collisionSet, overloadIndex, enrichment, includeSummary, includeSuggestions));
 
         return sb.ToString();
     }
@@ -368,6 +354,7 @@ public sealed class ObsidianEmitter : IEmitter
         HashSet<string> collisionSet,
         Dictionary<MethodId, string?> overloadIndex,
         EnrichmentResponse? enrichment,
+        bool includeSummary,
         bool includeSuggestions)
     {
         var sb = new StringBuilder();
@@ -380,7 +367,14 @@ public sealed class ObsidianEmitter : IEmitter
         sb.AppendLine($"#### [[{selfLink}]]");
         sb.AppendLine("##### What it does:");
 
-        if (!string.IsNullOrWhiteSpace(method.DocComment))
+        if (includeSummary && enrichment is not null && HasSummaryContent(enrichment))
+        {
+            if (!string.IsNullOrWhiteSpace(enrichment.Purpose))
+                sb.AppendLine($"**{enrichment.Purpose}**");
+            if (!string.IsNullOrWhiteSpace(enrichment.Summary))
+                sb.AppendLine($"- {enrichment.Summary}");
+        }
+        else if (!string.IsNullOrWhiteSpace(method.DocComment))
         {
             foreach (var line in method.DocComment.Split('\n'))
                 sb.AppendLine(line.TrimEnd());
