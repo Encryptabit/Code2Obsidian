@@ -24,7 +24,10 @@ public static class PromptBuilder
 
         var lines = new List<string>
         {
-            "Analyze the code entity, then respond ONLY with these XML tags:"
+            "Analyze the code entity, then respond ONLY with these XML tags:",
+            "Use tools as needed to inspect source code details.",
+            "Start from the provided Source file and stay within the provided Analysis root.",
+            "Avoid broad repository scans when targeted lookups are sufficient."
         };
 
         if (includeSummary)
@@ -54,7 +57,8 @@ public static class PromptBuilder
             analysis,
             includeSummary: true,
             includeSuggestions: false,
-            existingWhatItDoes: null);
+            existingWhatItDoes: null,
+            analysisRoot: null);
     }
 
     /// <summary>
@@ -65,7 +69,8 @@ public static class PromptBuilder
         AnalysisResult analysis,
         bool includeSummary,
         bool includeSuggestions,
-        string? existingWhatItDoes)
+        string? existingWhatItDoes,
+        string? analysisRoot = null)
     {
         if (!includeSummary && !includeSuggestions)
             throw new ArgumentException("At least one enrichment mode must be enabled.");
@@ -79,11 +84,22 @@ public static class PromptBuilder
         var lines = new List<string>
         {
             intent,
-            "",
+            ""
+        };
+
+        AddLocationContext(
+            lines,
+            method.FilePath,
+            method.Id.Value,
+            method.ProjectName,
+            analysisRoot);
+
+        lines.AddRange(
+        [
             $"Signature: {method.DisplaySignature}",
             $"Class: {method.ContainingTypeName}",
             $"Complexity: {method.CyclomaticComplexity}"
-        };
+        ]);
 
         if (!string.IsNullOrWhiteSpace(method.DocComment))
         {
@@ -127,7 +143,8 @@ public static class PromptBuilder
             analysis,
             includeSummary: true,
             includeSuggestions: false,
-            existingWhatItDoes: null);
+            existingWhatItDoes: null,
+            analysisRoot: null);
     }
 
     /// <summary>
@@ -138,7 +155,8 @@ public static class PromptBuilder
         AnalysisResult analysis,
         bool includeSummary,
         bool includeSuggestions,
-        string? existingWhatItDoes)
+        string? existingWhatItDoes,
+        string? analysisRoot = null)
     {
         if (!includeSummary && !includeSuggestions)
             throw new ArgumentException("At least one enrichment mode must be enabled.");
@@ -161,9 +179,20 @@ public static class PromptBuilder
         var lines = new List<string>
         {
             intent,
-            "",
-            $"Type: {type.FullName}"
+            ""
         };
+
+        AddLocationContext(
+            lines,
+            type.FilePath,
+            type.Id.Value,
+            type.ProjectName,
+            analysisRoot);
+
+        lines.AddRange(
+        [
+            $"Type: {type.FullName}"
+        ]);
 
         if (!string.IsNullOrWhiteSpace(type.BaseClassFullName))
         {
@@ -226,5 +255,21 @@ public static class PromptBuilder
             .OrderBy(name => name, StringComparer.Ordinal)
             .Take(limit)
             .ToList();
+    }
+
+    private static void AddLocationContext(
+        List<string> lines,
+        string sourceFile,
+        string entityId,
+        string project,
+        string? analysisRoot)
+    {
+        lines.Add("Location context:");
+        if (!string.IsNullOrWhiteSpace(analysisRoot))
+            lines.Add($"Analysis root: {analysisRoot}");
+        lines.Add($"Source file: {sourceFile}");
+        lines.Add($"Entity id: {entityId}");
+        lines.Add($"Project: {project}");
+        lines.Add("");
     }
 }

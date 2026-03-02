@@ -446,6 +446,7 @@ internal static class Program
                     progress: null,
                     confirmEnrichment: null,
                     dirtyFiles: null,
+                    analysisRoot: Path.GetDirectoryName(solutionPath),
                     includeSummary: enrich,
                     includeSuggestions: suggestions);
                 enrichers.Add(llmEnricher);
@@ -657,6 +658,7 @@ internal static class Program
                     progress,
                     llm.ConfirmEnrichment,
                     llm.DirtyFiles,
+                    llm.AnalysisRoot,
                     llm.IncludeSummary,
                     llm.IncludeSuggestions);
                 result.Add(newLlm);

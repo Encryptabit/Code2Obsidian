@@ -27,6 +27,7 @@ public sealed class LlmEnricher : IEnricher
     private readonly IProgress<PipelineProgress>? _progress;
     private readonly Func<int, int, int, decimal, bool>? _confirmEnrichment;
     private readonly IReadOnlySet<string>? _dirtyFiles;
+    private readonly string? _analysisRoot;
     private readonly bool _includeSummary;
     private readonly bool _includeSuggestions;
 
@@ -47,6 +48,7 @@ public sealed class LlmEnricher : IEnricher
         IProgress<PipelineProgress>? progress = null,
         Func<int, int, int, decimal, bool>? confirmEnrichment = null,
         IReadOnlySet<string>? dirtyFiles = null,
+        string? analysisRoot = null,
         bool includeSummary = true,
         bool includeSuggestions = false)
     {
@@ -59,6 +61,7 @@ public sealed class LlmEnricher : IEnricher
         _progress = progress;
         _confirmEnrichment = confirmEnrichment;
         _dirtyFiles = dirtyFiles;
+        _analysisRoot = NormalizeAnalysisRoot(analysisRoot);
         _includeSummary = includeSummary;
         _includeSuggestions = includeSuggestions;
     }
@@ -69,6 +72,7 @@ public sealed class LlmEnricher : IEnricher
     internal LlmConfig Config => _config;
     internal Func<int, int, int, decimal, bool>? ConfirmEnrichment => _confirmEnrichment;
     internal IReadOnlySet<string>? DirtyFiles => _dirtyFiles;
+    internal string? AnalysisRoot => _analysisRoot;
     internal bool IncludeSummary => _includeSummary;
     internal bool IncludeSuggestions => _includeSuggestions;
 
@@ -201,7 +205,8 @@ public sealed class LlmEnricher : IEnricher
                         analysis,
                         _includeSummary,
                         _includeSuggestions,
-                        uncachedMethods[i].existingWhatItDoes);
+                        uncachedMethods[i].existingWhatItDoes,
+                        _analysisRoot);
                     totalSampleTokens += CostEstimator.EstimateTokens(systemPrompt + prompt);
                 }
                 avgInputTokens = totalSampleTokens / sampleCount;
@@ -276,7 +281,8 @@ public sealed class LlmEnricher : IEnricher
                 analysis,
                 _includeSummary,
                 _includeSuggestions,
-                existingWhatItDoes);
+                existingWhatItDoes,
+                _analysisRoot);
             var messages = new List<ChatMessage>
             {
                 new(ChatRole.System, systemPrompt),
@@ -360,7 +366,8 @@ public sealed class LlmEnricher : IEnricher
                 analysis,
                 _includeSummary,
                 _includeSuggestions,
-                existingWhatItDoes);
+                existingWhatItDoes,
+                _analysisRoot);
             var messages = new List<ChatMessage>
             {
                 new(ChatRole.System, systemPrompt),
@@ -530,6 +537,21 @@ public sealed class LlmEnricher : IEnricher
             parts.Add(response.Summary.Trim());
 
         return parts.Count == 0 ? null : string.Join("\n\n", parts);
+    }
+
+    private static string? NormalizeAnalysisRoot(string? analysisRoot)
+    {
+        if (string.IsNullOrWhiteSpace(analysisRoot))
+            return null;
+
+        try
+        {
+            return Path.GetFullPath(analysisRoot.Trim());
+        }
+        catch
+        {
+            return analysisRoot.Trim();
+        }
     }
 
     private void ReportEntityProgress(string description, int total)

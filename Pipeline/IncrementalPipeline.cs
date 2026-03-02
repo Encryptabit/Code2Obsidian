@@ -215,6 +215,13 @@ public sealed class IncrementalPipeline
         result.FilesSkipped = totalDocuments - analyzeCount;
         result.ProjectsAnalyzed = freshAnalysis.ProjectCount;
 
+        // Explicitly complete the analysis stage before switching to enrichment.
+        _progress?.Report(new PipelineProgress(
+            PipelineStage.Analyzing,
+            "Analysis complete",
+            totalDocuments,
+            totalDocuments));
+
         sw.Restart();
 
         // Step 5: Merge fresh analysis with stored data for complete result
@@ -246,6 +253,7 @@ public sealed class IncrementalPipeline
                     _progress,
                     llm.ConfirmEnrichment,
                     dirtyFiles: llmDirtyFileSet,
+                    analysisRoot: llm.AnalysisRoot,
                     includeSummary: llm.IncludeSummary,
                     includeSuggestions: llm.IncludeSuggestions);
             }

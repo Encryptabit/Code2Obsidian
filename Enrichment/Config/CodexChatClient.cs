@@ -9,7 +9,8 @@ namespace Code2Obsidian.Enrichment.Config;
 /// <summary>
 /// IChatClient implementation that speaks the Codex JSON-RPC-over-WebSocket protocol.
 /// Maintains one websocket session but starts a fresh Codex thread per turn to keep
-/// context bounded, and auto-declines approval requests (we only want text responses).
+/// context bounded. Command execution approvals are allowed for on-disk lookup while
+/// file change approvals are denied to keep enrichment analysis-only.
 /// </summary>
 public sealed class CodexChatClient : IChatClient, IDisposable
 {
@@ -201,20 +202,36 @@ public sealed class CodexChatClient : IChatClient, IDisposable
                         break;
 
                     case "item/commandExecution/requestApproval":
-                    case "item/fileChange/requestApproval":
-                        // Auto-decline - we only want text
-                        var approvalId = msg["id"];
-                        if (approvalId is not null)
+                        var commandApprovalId = msg["id"];
+                        if (commandApprovalId is not null)
                         {
                             using var replyCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                             replyCts.CancelAfter(TurnTimeout);
                             await SendAsync(new JsonObject
                             {
-                                ["id"] = approvalId.DeepClone(),
+                                ["id"] = commandApprovalId.DeepClone(),
+                                ["result"] = new JsonObject
+                                {
+                                    ["approved"] = true,
+                                    ["reason"] = "Code2Obsidian enrichment allows read-only code lookup"
+                                }
+                            }, replyCts.Token);
+                        }
+                        break;
+
+                    case "item/fileChange/requestApproval":
+                        var fileChangeApprovalId = msg["id"];
+                        if (fileChangeApprovalId is not null)
+                        {
+                            using var replyCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                            replyCts.CancelAfter(TurnTimeout);
+                            await SendAsync(new JsonObject
+                            {
+                                ["id"] = fileChangeApprovalId.DeepClone(),
                                 ["result"] = new JsonObject
                                 {
                                     ["approved"] = false,
-                                    ["reason"] = "Code2Obsidian enrichment - text only"
+                                    ["reason"] = "Code2Obsidian enrichment is analysis-only"
                                 }
                             }, replyCts.Token);
                         }
