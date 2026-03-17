@@ -116,6 +116,7 @@ public static class ChatClientFactory
                 traceWs: config.TraceCodexWs,
                 onEndpointUnavailable: onEndpointUnavailable,
                 reasoningEffort: config.ReasoningEffort,
+                serviceTier: config.ServiceTier,
                 cwd: cwd);
         }
 
@@ -126,6 +127,7 @@ public static class ChatClientFactory
                 traceWs: config.TraceCodexWs,
                 onEndpointUnavailable: onEndpointUnavailable,
                 reasoningEffort: config.ReasoningEffort,
+                serviceTier: config.ServiceTier,
                 cwd: cwd))
             .ToArray();
         return new RoundRobinChatClient(pooledClients);

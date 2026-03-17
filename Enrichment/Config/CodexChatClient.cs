@@ -50,6 +50,7 @@ public sealed class CodexChatClient : IChatClient, IDisposable
     private readonly Uri _endpoint;
     private readonly string _model;
     private readonly string? _reasoningEffort;
+    private readonly string? _serviceTier;
     private readonly string? _cwd;
     private readonly bool _traceWs;
     private readonly Action<Uri, string>? _onEndpointUnavailable;
@@ -66,11 +67,13 @@ public sealed class CodexChatClient : IChatClient, IDisposable
         bool traceWs = false,
         Action<Uri, string>? onEndpointUnavailable = null,
         string? reasoningEffort = null,
+        string? serviceTier = null,
         string? cwd = null)
     {
         _endpoint = endpoint;
         _model = model;
         _reasoningEffort = reasoningEffort;
+        _serviceTier = serviceTier;
         _cwd = cwd;
         _traceWs = traceWs;
         _onEndpointUnavailable = onEndpointUnavailable;
@@ -320,6 +323,8 @@ public sealed class CodexChatClient : IChatClient, IDisposable
             ["model"] = _model,
             ["approvalPolicy"] = "never"
         };
+        if (!string.IsNullOrWhiteSpace(_serviceTier))
+            threadParams["serviceTier"] = _serviceTier;
         if (!string.IsNullOrWhiteSpace(_cwd))
             threadParams["cwd"] = _cwd;
         await SendAsync(new JsonObject

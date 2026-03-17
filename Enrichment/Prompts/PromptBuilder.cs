@@ -39,7 +39,12 @@ public static class PromptBuilder
 
         if (includeSuggestions)
         {
-            lines.Add("<improvements>2-5 concise, concrete optimization/refactor suggestions as markdown bullets (each line starts with '- ').</improvements>");
+            lines.Add("<improvements>2-5 markdown bullets (each line starts with '- '). Each suggestion must:");
+            lines.Add("  - Be specific to THIS code, not generic advice (no boilerplate null checks, no 'add unit tests' unless a concrete gap exists).");
+            lines.Add("  - Identify a real problem: correctness bug, performance issue, maintainability concern, or missed simplification.");
+            lines.Add("  - State what to change and why it matters (e.g., 'Replace GroupBy+First with a single pass — current code is O(n log n) for a task that is O(n)').");
+            lines.Add("  - Skip suggestions the code already handles correctly. If the code is clean, return fewer bullets rather than padding with low-value advice.");
+            lines.Add("</improvements>");
         }
 
         lines.Add("No preamble or text outside these tags.");

@@ -289,11 +289,9 @@ public sealed class LlmEnricher : IEnricher
                 new(ChatRole.User, userPrompt)
             };
 
-            var options = new ChatOptions
-            {
-                MaxOutputTokens = _config.MaxOutputTokens,
-                Temperature = 0.3f
-            };
+            var options = new ChatOptions { Temperature = 0.3f };
+            if (_config.MaxOutputTokens > 0)
+                options.MaxOutputTokens = _config.MaxOutputTokens;
 
             var response = await _client.GetResponseAsync(messages, options, ct);
             var rawText = response.Text;
@@ -374,11 +372,9 @@ public sealed class LlmEnricher : IEnricher
                 new(ChatRole.User, userPrompt)
             };
 
-            var options = new ChatOptions
-            {
-                MaxOutputTokens = _config.MaxOutputTokens,
-                Temperature = 0.3f
-            };
+            var options = new ChatOptions { Temperature = 0.3f };
+            if (_config.MaxOutputTokens > 0)
+                options.MaxOutputTokens = _config.MaxOutputTokens;
 
             var response = await _client.GetResponseAsync(messages, options, ct);
             var rawText = response.Text;
