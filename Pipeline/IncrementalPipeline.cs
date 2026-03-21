@@ -255,7 +255,9 @@ public sealed class IncrementalPipeline
                     dirtyFiles: llmDirtyFileSet,
                     analysisRoot: llm.AnalysisRoot,
                     includeSummary: llm.IncludeSummary,
-                    includeSuggestions: llm.IncludeSuggestions);
+                    includeSuggestions: llm.IncludeSuggestions,
+                    fanInThreshold: llm.FanInThreshold,
+                    fanOutThreshold: llm.FanOutThreshold);
             }
             _progress?.Report(new PipelineProgress(
                 PipelineStage.Enriching,

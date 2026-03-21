@@ -117,7 +117,9 @@ public static class ChatClientFactory
                 onEndpointUnavailable: onEndpointUnavailable,
                 reasoningEffort: config.ReasoningEffort,
                 serviceTier: config.ServiceTier,
-                cwd: cwd);
+                cwd: cwd,
+                allowCommandExecution: !SerenaMcpSettings.IsEnabled(config),
+                resetConnectionAfterTurn: SerenaMcpSettings.IsEnabled(config));
         }
 
         var pooledClients = endpointUris
@@ -128,7 +130,9 @@ public static class ChatClientFactory
                 onEndpointUnavailable: onEndpointUnavailable,
                 reasoningEffort: config.ReasoningEffort,
                 serviceTier: config.ServiceTier,
-                cwd: cwd))
+                cwd: cwd,
+                allowCommandExecution: !SerenaMcpSettings.IsEnabled(config),
+                resetConnectionAfterTurn: SerenaMcpSettings.IsEnabled(config)))
             .ToArray();
         return new RoundRobinChatClient(pooledClients);
     }

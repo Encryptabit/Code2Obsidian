@@ -19,5 +19,6 @@ public sealed record LlmConfig(
     [property: JsonPropertyName("traceCodexWs")] bool TraceCodexWs = false,
     [property: JsonPropertyName("exclude")] string[]? Exclude = null,
     [property: JsonPropertyName("reasoningEffort")] string? ReasoningEffort = null,
-    [property: JsonPropertyName("serviceTier")] string? ServiceTier = null
+    [property: JsonPropertyName("serviceTier")] string? ServiceTier = null,
+    [property: JsonPropertyName("serena")] SerenaMcpConfig? Serena = null
 );

@@ -187,6 +187,7 @@ internal static class Program
         CancellationToken ct)
     {
         CodexAppServerPool? codexPool = null;
+        IChatClient? llmClient = null;
         try
         {
             CodexLogBoard.Reset();
@@ -292,7 +293,17 @@ internal static class Program
                     config = config with { TraceCodexWs = true };
                 }
 
-                if (config.Provider.Equals("codex", StringComparison.OrdinalIgnoreCase) && poolSize is null)
+                if (SerenaMcpSettings.IsEnabled(config) &&
+                    !config.Provider.Equals("codex", StringComparison.OrdinalIgnoreCase))
+                {
+                    AnsiConsole.MarkupLine("[red]Error:[/] Serena MCP symbol lookup is only supported with provider 'codex'.");
+                    return 1;
+                }
+
+                var manageCodexPool = config.Provider.Equals("codex", StringComparison.OrdinalIgnoreCase) &&
+                    (poolSize is not null || ShouldAutoStartCodexPool(config));
+
+                if (config.Provider.Equals("codex", StringComparison.OrdinalIgnoreCase) && !manageCodexPool)
                 {
                     CodexLogBoard.ConfigureInstances(GetConfiguredEndpoints(config));
                 }
@@ -301,12 +312,31 @@ internal static class Program
                     CodexLogBoard.Reset();
                 }
 
-                // Optionally launch a local Codex app-server pool.
-                if (poolSize is not null)
+                // Launch a managed local Codex app-server pool when explicitly requested,
+                // or by default for local/loopback Codex endpoints.
+                if (manageCodexPool)
                 {
-                    if (poolSize.Value < 1)
+                    if (SerenaMcpSettings.IsEnabled(config))
                     {
-                        AnsiConsole.MarkupLine("[red]Error:[/] --pool-size must be >= 1.");
+                        try
+                        {
+                            var (resolvedSerena, installedMessage) =
+                                await SerenaMcpSettings.EnsureCommandAvailableAsync(config.Serena, ct);
+                            config = config with { Serena = resolvedSerena };
+                            if (!string.IsNullOrWhiteSpace(installedMessage))
+                                AnsiConsole.MarkupLine($"[green]{Markup.Escape(installedMessage)}[/]");
+                        }
+                        catch (InvalidOperationException ex)
+                        {
+                            AnsiConsole.MarkupLine($"[red]Serena setup error:[/] {Markup.Escape(ex.Message)}");
+                            return 1;
+                        }
+                    }
+
+                    var effectivePoolSize = poolSize ?? CountConfiguredEndpoints(config);
+                    if (effectivePoolSize < 1)
+                    {
+                        AnsiConsole.MarkupLine("[red]Error:[/] Codex pool size must be >= 1.");
                         return 1;
                     }
 
@@ -317,16 +347,17 @@ internal static class Program
                     }
 
                     var baseEndpoint = ResolveCodexPoolBaseEndpoint(config);
-                    var plannedEndpoints = CodexAppServerPool.PreviewEndpoints(baseEndpoint, poolSize.Value);
+                    var plannedEndpoints = CodexAppServerPool.PreviewEndpoints(baseEndpoint, effectivePoolSize);
                     CodexLogBoard.ConfigureInstances(plannedEndpoints);
                     try
                     {
                         codexPool = await CodexAppServerPool.StartAsync(
-                            poolSize.Value,
+                            effectivePoolSize,
                             baseEndpoint,
                             codexWslDistro,
                             ct,
-                            workingDirectory: Path.GetDirectoryName(solutionPath));
+                            workingDirectory: Path.GetDirectoryName(solutionPath),
+                            serena: config.Serena);
                     }
                     catch (Exception ex)
                     {
@@ -426,6 +457,7 @@ internal static class Program
                 {
                     client = ChatClientFactory.CreateFromConfig(config, codexEndpointUnavailable,
                         solutionDirectory: Path.GetDirectoryName(solutionPath));
+                    llmClient = client;
                 }
                 catch (InvalidOperationException ex)
                 {
@@ -448,7 +480,9 @@ internal static class Program
                     dirtyFiles: null,
                     analysisRoot: Path.GetDirectoryName(solutionPath),
                     includeSummary: enrich,
-                    includeSuggestions: suggestions);
+                    includeSuggestions: suggestions,
+                    fanInThreshold: fanInThreshold,
+                    fanOutThreshold: fanInThreshold);
                 enrichers.Add(llmEnricher);
 
                 var llmModeText = enrich && suggestions
@@ -465,6 +499,15 @@ internal static class Program
                 {
                     AnsiConsole.MarkupLine($"[green]LLM enabled ({llmModeText}):[/] {config.Provider}/{config.Model}");
                 }
+
+                    if (SerenaMcpSettings.IsEnabled(config))
+                    {
+                        var serenaConfig = SerenaMcpSettings.Normalize(config.Serena)!;
+                        var serenaModeText = serenaConfig.SkipOnboarding
+                            ? "headless, automatic onboarding disabled"
+                            : "headless";
+                        AnsiConsole.MarkupLine($"[green]Serena symbol lookup:[/] enabled ({serenaModeText})");
+                    }
                 AnsiConsole.WriteLine();
             }
 
@@ -630,6 +673,11 @@ internal static class Program
         }
         finally
         {
+            if (llmClient is IAsyncDisposable asyncDisposable)
+                await asyncDisposable.DisposeAsync();
+            else if (llmClient is IDisposable disposable)
+                disposable.Dispose();
+
             if (codexPool is not null)
                 await codexPool.DisposeAsync();
         }
@@ -660,7 +708,9 @@ internal static class Program
                     llm.DirtyFiles,
                     llm.AnalysisRoot,
                     llm.IncludeSummary,
-                    llm.IncludeSuggestions);
+                    llm.IncludeSuggestions,
+                    llm.FanInThreshold,
+                    llm.FanOutThreshold);
                 result.Add(newLlm);
             }
             else
@@ -1060,6 +1110,29 @@ internal static class Program
         }
 
         return "ws://127.0.0.1:8080";
+    }
+
+    private static bool ShouldAutoStartCodexPool(LlmConfig config)
+    {
+        if (!config.Provider.Equals("codex", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        foreach (var endpoint in GetConfiguredEndpoints(config))
+        {
+            if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var uri))
+                return false;
+
+            if (!uri.Scheme.Equals("ws", StringComparison.OrdinalIgnoreCase) &&
+                !uri.Scheme.Equals("wss", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            if (!uri.IsLoopback)
+                return false;
+        }
+
+        return true;
     }
 
     private static IReadOnlyList<string> GetConfiguredEndpoints(LlmConfig config)

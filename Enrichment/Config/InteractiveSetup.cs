@@ -57,6 +57,7 @@ public static class InteractiveSetup
         string? apiKey = null;
         string? endpoint = null;
         string[]? endpoints = null;
+        SerenaMcpConfig? serena = null;
 
         if (provider is "anthropic" or "openai")
         {
@@ -101,6 +102,13 @@ public static class InteractiveSetup
             }
 
             endpoints = splitEndpoints.Length > 1 ? splitEndpoints : null;
+
+            var enableSerena = AnsiConsole.Confirm(
+                "Enable [green]Serena MCP[/] for symbol lookup? Requires a working `uvx`/Serena setup.",
+                defaultValue: false);
+
+            if (enableSerena)
+                serena = new SerenaMcpConfig(Enabled: true);
         }
 
         // Max concurrency
@@ -114,7 +122,8 @@ public static class InteractiveSetup
             ApiKey: apiKey,
             Endpoint: endpoint,
             MaxConcurrency: maxConcurrency,
-            Endpoints: endpoints
+            Endpoints: endpoints,
+            Serena: serena
         );
 
         LlmConfigLoader.Save(configPath, config);

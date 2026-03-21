@@ -78,7 +78,8 @@ public static class LlmConfigLoader
         {
             Endpoint = normalizedEndpoint,
             Endpoints = normalizedEndpoints,
-            Exclude = normalizedExclude
+            Exclude = normalizedExclude,
+            Serena = SerenaMcpSettings.Normalize(config.Serena)
         };
 
         return config;

@@ -8,9 +8,10 @@ namespace Code2Obsidian.Enrichment.Config;
 
 /// <summary>
 /// IChatClient implementation that speaks the Codex JSON-RPC-over-WebSocket protocol.
-/// Maintains one websocket session but starts a fresh Codex thread per turn to keep
-/// context bounded. Command execution approvals are allowed for on-disk lookup while
-/// file change approvals are denied to keep enrichment analysis-only.
+/// Starts a fresh Codex thread per turn, and can recycle the websocket session
+/// between turns to bound app-server memory during tool-heavy workflows.
+/// File change approvals are always denied, and shell command approvals can be
+/// disabled to enforce Serena-first enrichment.
 /// </summary>
 public sealed class CodexChatClient : IChatClient, IDisposable
 {
@@ -53,6 +54,8 @@ public sealed class CodexChatClient : IChatClient, IDisposable
     private readonly string? _serviceTier;
     private readonly string? _cwd;
     private readonly bool _traceWs;
+    private readonly bool _allowCommandExecution;
+    private readonly bool _resetConnectionAfterTurn;
     private readonly Action<Uri, string>? _onEndpointUnavailable;
     private readonly SemaphoreSlim _turnLock = new(1, 1);
 
@@ -68,7 +71,9 @@ public sealed class CodexChatClient : IChatClient, IDisposable
         Action<Uri, string>? onEndpointUnavailable = null,
         string? reasoningEffort = null,
         string? serviceTier = null,
-        string? cwd = null)
+        string? cwd = null,
+        bool allowCommandExecution = true,
+        bool resetConnectionAfterTurn = false)
     {
         _endpoint = endpoint;
         _model = model;
@@ -76,6 +81,8 @@ public sealed class CodexChatClient : IChatClient, IDisposable
         _serviceTier = serviceTier;
         _cwd = cwd;
         _traceWs = traceWs;
+        _allowCommandExecution = allowCommandExecution;
+        _resetConnectionAfterTurn = resetConnectionAfterTurn;
         _onEndpointUnavailable = onEndpointUnavailable;
     }
 
@@ -102,6 +109,8 @@ public sealed class CodexChatClient : IChatClient, IDisposable
         }
         finally
         {
+            if (_resetConnectionAfterTurn && !_disposed)
+                ResetConnection();
             _turnLock.Release();
         }
     }
@@ -215,8 +224,10 @@ public sealed class CodexChatClient : IChatClient, IDisposable
                                 ["id"] = commandApprovalId.DeepClone(),
                                 ["result"] = new JsonObject
                                 {
-                                    ["approved"] = true,
-                                    ["reason"] = "Code2Obsidian enrichment allows read-only code lookup"
+                                    ["approved"] = _allowCommandExecution,
+                                    ["reason"] = _allowCommandExecution
+                                        ? "Code2Obsidian enrichment allows read-only code lookup"
+                                        : "Code2Obsidian Serena enrichment forbids shell command lookup; use Serena tools instead"
                                 }
                             }, replyCts.Token);
                         }

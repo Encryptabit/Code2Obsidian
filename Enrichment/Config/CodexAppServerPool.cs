@@ -21,13 +21,19 @@ public sealed class CodexAppServerPool : IAsyncDisposable, IDisposable
     private readonly CancellationTokenSource _lifetimeCts = new();
     private readonly string? _wslDistro;
     private readonly string? _workingDirectory;
+    private readonly SerenaMcpConfig? _serena;
     private bool _disposed;
 
-    private CodexAppServerPool(IReadOnlyList<string> endpoints, string? wslDistro, string? workingDirectory)
+    private CodexAppServerPool(
+        IReadOnlyList<string> endpoints,
+        string? wslDistro,
+        string? workingDirectory,
+        SerenaMcpConfig? serena)
     {
         Endpoints = endpoints;
         _wslDistro = wslDistro;
         _workingDirectory = workingDirectory;
+        _serena = serena;
     }
 
     public IReadOnlyList<string> Endpoints { get; }
@@ -41,19 +47,20 @@ public sealed class CodexAppServerPool : IAsyncDisposable, IDisposable
         string baseEndpoint,
         string? wslDistro,
         CancellationToken ct,
-        string? workingDirectory = null)
+        string? workingDirectory = null,
+        SerenaMcpConfig? serena = null)
     {
         if (poolSize < 1)
             throw new ArgumentOutOfRangeException(nameof(poolSize), "Pool size must be >= 1.");
 
         var endpoints = BuildEndpoints(baseEndpoint, poolSize);
-        var pool = new CodexAppServerPool(endpoints, wslDistro, workingDirectory);
+        var pool = new CodexAppServerPool(endpoints, wslDistro, workingDirectory, serena);
 
         try
         {
             foreach (var endpoint in endpoints)
             {
-                pool.StartAndTrackServer(endpoint);
+                pool.StartAndTrackServer(endpoint, serena);
             }
 
             await WaitForAllEndpointsAsync(endpoints, ct);
@@ -149,9 +156,9 @@ public sealed class CodexAppServerPool : IAsyncDisposable, IDisposable
         return true;
     }
 
-    private void StartAndTrackServer(string endpoint)
+    private void StartAndTrackServer(string endpoint, SerenaMcpConfig? serena)
     {
-        var process = StartServer(endpoint, _wslDistro, OnProcessExited, _workingDirectory);
+        var process = StartServer(endpoint, _wslDistro, OnProcessExited, _workingDirectory, serena);
         lock (_gate)
         {
             _processesByEndpoint[endpoint] = process;
@@ -162,9 +169,10 @@ public sealed class CodexAppServerPool : IAsyncDisposable, IDisposable
         string endpoint,
         string? wslDistro,
         Action<string, Process>? onExited = null,
-        string? workingDirectory = null)
+        string? workingDirectory = null,
+        SerenaMcpConfig? serena = null)
     {
-        var psi = BuildServerStartInfo(endpoint, wslDistro);
+        var psi = BuildServerStartInfo(endpoint, wslDistro, serena);
         if (!string.IsNullOrWhiteSpace(workingDirectory))
             psi.WorkingDirectory = workingDirectory;
 
@@ -234,7 +242,7 @@ public sealed class CodexAppServerPool : IAsyncDisposable, IDisposable
                 try
                 {
                     CodexLogBoard.Report(endpoint, $"restarting codex app-server (attempt {attempt})...");
-                    replacement = StartServer(endpoint, _wslDistro, OnProcessExited, _workingDirectory);
+                    replacement = StartServer(endpoint, _wslDistro, OnProcessExited, _workingDirectory, _serena);
 
                     lock (_gate)
                     {
@@ -327,8 +335,9 @@ public sealed class CodexAppServerPool : IAsyncDisposable, IDisposable
         }
     }
 
-    private static ProcessStartInfo BuildServerStartInfo(string endpoint, string? wslDistro)
+    private static ProcessStartInfo BuildServerStartInfo(string endpoint, string? wslDistro, SerenaMcpConfig? serena)
     {
+        var serenaOverrides = SerenaMcpSettings.BuildCodexConfigOverrides(serena);
         var psi = new ProcessStartInfo
         {
             UseShellExecute = false,
@@ -354,23 +363,30 @@ public sealed class CodexAppServerPool : IAsyncDisposable, IDisposable
             // Use a login shell so user PATH setup (e.g. nvm-managed codex) is available.
             psi.ArgumentList.Add("bash");
             psi.ArgumentList.Add("-lc");
-            psi.ArgumentList.Add(BuildWslLaunchCommand(endpoint));
+            psi.ArgumentList.Add(BuildWslLaunchCommand(endpoint, serenaOverrides));
             return psi;
         }
 
         psi.FileName = "codex";
         psi.ArgumentList.Add("app-server");
+        foreach (var configOverride in serenaOverrides)
+        {
+            psi.ArgumentList.Add("-c");
+            psi.ArgumentList.Add(configOverride);
+        }
         psi.ArgumentList.Add("--listen");
         psi.ArgumentList.Add(endpoint);
         return psi;
     }
 
-    private static string BuildWslLaunchCommand(string endpoint)
+    private static string BuildWslLaunchCommand(string endpoint, IReadOnlyList<string> serenaOverrides)
     {
         var codexBin = Environment.GetEnvironmentVariable("CODEX_POOL_WSL_CODEX_BIN");
         var codexTarget = string.IsNullOrWhiteSpace(codexBin) ? "codex" : codexBin;
         var quotedCodex = BashSingleQuote(codexTarget);
         var quotedEndpoint = BashSingleQuote(endpoint);
+        var configArgs = string.Join(" ",
+            serenaOverrides.Select(value => $"-c {BashSingleQuote(value)}"));
 
         return $$"""
             set -e
@@ -384,7 +400,7 @@ public sealed class CodexAppServerPool : IAsyncDisposable, IDisposable
               exit 127
             fi
 
-            exec {{quotedCodex}} app-server --listen {{quotedEndpoint}}
+            exec {{quotedCodex}} app-server {{configArgs}} --listen {{quotedEndpoint}}
             """;
     }
 

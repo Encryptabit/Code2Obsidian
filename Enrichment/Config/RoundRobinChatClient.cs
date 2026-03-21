@@ -20,6 +20,7 @@ public sealed class RoundRobinChatClient : IChatClient, IDisposable, IAsyncDispo
     }
 
     public ChatClientMetadata Metadata => new("round-robin", null, null);
+    internal IReadOnlyList<IChatClient> Clients => _clients;
 
     public Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> chatMessages,

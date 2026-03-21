@@ -30,6 +30,9 @@ public sealed class LlmEnricher : IEnricher
     private readonly string? _analysisRoot;
     private readonly bool _includeSummary;
     private readonly bool _includeSuggestions;
+    private readonly int _fanInThreshold;
+    private readonly int _fanOutThreshold;
+    private int _serenaValidated;
 
     private int _inputTokensUsed;
     private int _outputTokensUsed;
@@ -50,7 +53,9 @@ public sealed class LlmEnricher : IEnricher
         IReadOnlySet<string>? dirtyFiles = null,
         string? analysisRoot = null,
         bool includeSummary = true,
-        bool includeSuggestions = false)
+        bool includeSuggestions = false,
+        int fanInThreshold = 10,
+        int fanOutThreshold = 10)
     {
         if (!includeSummary && !includeSuggestions)
             throw new ArgumentException("LlmEnricher requires at least one mode: summary and/or suggestions.");
@@ -64,6 +69,8 @@ public sealed class LlmEnricher : IEnricher
         _analysisRoot = NormalizeAnalysisRoot(analysisRoot);
         _includeSummary = includeSummary;
         _includeSuggestions = includeSuggestions;
+        _fanInThreshold = Math.Max(1, fanInThreshold);
+        _fanOutThreshold = Math.Max(1, fanOutThreshold);
     }
 
     // Read-only accessors for reconstructing with a different IProgress
@@ -75,6 +82,8 @@ public sealed class LlmEnricher : IEnricher
     internal string? AnalysisRoot => _analysisRoot;
     internal bool IncludeSummary => _includeSummary;
     internal bool IncludeSuggestions => _includeSuggestions;
+    internal int FanInThreshold => _fanInThreshold;
+    internal int FanOutThreshold => _fanOutThreshold;
 
     /// <summary>Human-readable name for pipeline progress display.</summary>
     public string Name => _includeSummary && _includeSuggestions
@@ -112,8 +121,12 @@ public sealed class LlmEnricher : IEnricher
         enriched.IncludeSummary |= _includeSummary;
         enriched.IncludeSuggestions |= _includeSuggestions;
 
-        using var semaphore = new SemaphoreSlim(_config.MaxConcurrency);
-        var systemPrompt = PromptBuilder.BuildSystemPrompt(_includeSummary, _includeSuggestions);
+        await EnsureSerenaReadyAsync(ct);
+
+        var systemPrompt = PromptBuilder.BuildSystemPrompt(
+            _includeSummary,
+            _includeSuggestions,
+            preferSerenaSymbolLookup: SerenaMcpSettings.IsEnabled(_config));
         var modeLabel = _includeSummary && _includeSuggestions
             ? "enrich/suggest"
             : _includeSummary
@@ -206,7 +219,9 @@ public sealed class LlmEnricher : IEnricher
                         _includeSummary,
                         _includeSuggestions,
                         uncachedMethods[i].existingWhatItDoes,
-                        _analysisRoot);
+                        _analysisRoot,
+                        _fanInThreshold,
+                        _fanOutThreshold);
                     totalSampleTokens += CostEstimator.EstimateTokens(systemPrompt + prompt);
                 }
                 avgInputTokens = totalSampleTokens / sampleCount;
@@ -232,17 +247,33 @@ public sealed class LlmEnricher : IEnricher
         var heartbeatTask = RunProgressHeartbeatAsync(totalEntities, modeLabel, heartbeatCts.Token);
         try
         {
-            // Phase 3: Process uncached methods in parallel with SemaphoreSlim gating
-            var methodTasks = uncachedMethods.Select(item => ProcessMethodAsync(
-                item.method, item.hash, item.existingWhatItDoes, systemPrompt,
-                analysis, enriched, semaphore, totalEntities, ct));
-            await Task.WhenAll(methodTasks);
+            // Phase 3: Process uncached methods with a bounded worker pool.
+            await RunBoundedAsync(
+                uncachedMethods,
+                (item, token) => ProcessMethodAsync(
+                    item.method,
+                    item.hash,
+                    item.existingWhatItDoes,
+                    systemPrompt,
+                    analysis,
+                    enriched,
+                    totalEntities,
+                    token),
+                ct);
 
-            // Phase 4: Process uncached types in parallel with SemaphoreSlim gating
-            var typeTasks = uncachedTypes.Select(item => ProcessTypeAsync(
-                item.type, item.hash, item.existingWhatItDoes, systemPrompt,
-                analysis, enriched, semaphore, totalEntities, ct));
-            await Task.WhenAll(typeTasks);
+            // Phase 4: Process uncached types with a bounded worker pool.
+            await RunBoundedAsync(
+                uncachedTypes,
+                (item, token) => ProcessTypeAsync(
+                    item.type,
+                    item.hash,
+                    item.existingWhatItDoes,
+                    systemPrompt,
+                    analysis,
+                    enriched,
+                    totalEntities,
+                    token),
+                ct);
 
             // Ensure all queued cache writes are committed before stage completion.
             await _cache.FlushAsync(ct);
@@ -267,12 +298,86 @@ public sealed class LlmEnricher : IEnricher
             totalEntities, totalEntities, force: true);
     }
 
+    private async Task EnsureSerenaReadyAsync(CancellationToken ct)
+    {
+        if (!SerenaMcpSettings.IsEnabled(_config))
+            return;
+
+        if (Interlocked.Exchange(ref _serenaValidated, 1) != 0)
+            return;
+
+        var clients = EnumerateClientsForSerenaReadinessChecks();
+        var options = new ChatOptions { Temperature = 0 };
+        var messages = new List<ChatMessage>
+        {
+            new(ChatRole.System, PromptBuilder.SerenaReadinessSystemPrompt),
+            new(ChatRole.User, PromptBuilder.BuildSerenaReadinessPrompt(_analysisRoot))
+        };
+
+        ReportProgress("Validating Serena onboarding state...", 0, Math.Max(1, clients.Count), force: true);
+
+        for (var i = 0; i < clients.Count; i++)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var response = await clients[i].GetResponseAsync(messages, options, ct);
+            var readiness = ParseSerenaReadinessResponse(response.Text);
+            if (!readiness.IsReady)
+            {
+                var guidance =
+                    " If you are using external Codex websocket endpoints, those endpoints must already expose the Serena MCP server and its onboarding/instructions tools. " +
+                    "If you want Code2Obsidian to inject Serena automatically, rerun with a local Codex app-server pool via --pool-size.";
+                throw new InvalidOperationException(
+                    $"Serena is not ready for headless entity enrichment: {readiness.Reason} " +
+                    "Automatic Serena onboarding was attempted when needed. " +
+                    "If this still fails, inspect the project's Serena state/logs and then rerun Code2Obsidian." +
+                    guidance);
+            }
+
+            ReportProgress(
+                $"Validated Serena readiness ({i + 1}/{clients.Count})",
+                i + 1,
+                clients.Count,
+                force: true);
+        }
+    }
+
+    private IReadOnlyList<IChatClient> EnumerateClientsForSerenaReadinessChecks()
+    {
+        if (_client is RoundRobinChatClient roundRobin)
+            return roundRobin.Clients;
+
+        return new[] { _client };
+    }
+
+    private static (bool IsReady, string Reason) ParseSerenaReadinessResponse(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return (false, "Codex returned an empty Serena readiness response.");
+
+        string? readyValue = null;
+        string? reason = null;
+
+        var readyMatch = Regex.Match(raw, @"<ready>(.*?)</ready>", RegexOptions.Singleline | RegexOptions.IgnoreCase);
+        if (readyMatch.Success)
+            readyValue = readyMatch.Groups[1].Value.Trim();
+
+        var reasonMatch = Regex.Match(raw, @"<reason>(.*?)</reason>", RegexOptions.Singleline | RegexOptions.IgnoreCase);
+        if (reasonMatch.Success)
+            reason = WebUtility.HtmlDecode(reasonMatch.Groups[1].Value.Trim());
+
+        var isReady = string.Equals(readyValue, "true", StringComparison.OrdinalIgnoreCase);
+        if (isReady)
+            return (true, string.IsNullOrWhiteSpace(reason) ? "ready" : reason!);
+
+        return (false, string.IsNullOrWhiteSpace(reason) ? raw.Trim() : reason!);
+    }
+
     private async Task ProcessMethodAsync(
         MethodInfo method, string hash, string? existingWhatItDoes, string systemPrompt, AnalysisResult analysis,
-        EnrichedResult enriched, SemaphoreSlim semaphore, int totalEntities,
+        EnrichedResult enriched, int totalEntities,
         CancellationToken ct)
     {
-        await semaphore.WaitAsync(ct);
         Interlocked.Increment(ref _entitiesInFlight);
         try
         {
@@ -282,7 +387,9 @@ public sealed class LlmEnricher : IEnricher
                 _includeSummary,
                 _includeSuggestions,
                 existingWhatItDoes,
-                _analysisRoot);
+                _analysisRoot,
+                _fanInThreshold,
+                _fanOutThreshold);
             var messages = new List<ChatMessage>
             {
                 new(ChatRole.System, systemPrompt),
@@ -346,16 +453,14 @@ public sealed class LlmEnricher : IEnricher
         finally
         {
             Interlocked.Decrement(ref _entitiesInFlight);
-            semaphore.Release();
         }
     }
 
     private async Task ProcessTypeAsync(
         TypeInfo type, string hash, string? existingWhatItDoes, string systemPrompt, AnalysisResult analysis,
-        EnrichedResult enriched, SemaphoreSlim semaphore, int totalEntities,
+        EnrichedResult enriched, int totalEntities,
         CancellationToken ct)
     {
-        await semaphore.WaitAsync(ct);
         Interlocked.Increment(ref _entitiesInFlight);
         try
         {
@@ -428,7 +533,6 @@ public sealed class LlmEnricher : IEnricher
         finally
         {
             Interlocked.Decrement(ref _entitiesInFlight);
-            semaphore.Release();
         }
     }
 
@@ -548,6 +652,38 @@ public sealed class LlmEnricher : IEnricher
         {
             return analysisRoot.Trim();
         }
+    }
+
+    private async Task RunBoundedAsync<T>(
+        IReadOnlyList<T> items,
+        Func<T, CancellationToken, Task> processItemAsync,
+        CancellationToken ct)
+    {
+        if (items.Count == 0)
+            return;
+
+        var workerCount = Math.Min(Math.Max(1, _config.MaxConcurrency), items.Count);
+        var nextIndex = -1;
+        var workers = new Task[workerCount];
+
+        async Task WorkerLoopAsync()
+        {
+            while (true)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                var index = Interlocked.Increment(ref nextIndex);
+                if (index >= items.Count)
+                    return;
+
+                await processItemAsync(items[index], ct);
+            }
+        }
+
+        for (var i = 0; i < workerCount; i++)
+            workers[i] = WorkerLoopAsync();
+
+        await Task.WhenAll(workers);
     }
 
     private void ReportEntityProgress(string description, int total)
