@@ -316,12 +316,17 @@ internal static class Program
                 // or by default for local/loopback Codex endpoints.
                 if (manageCodexPool)
                 {
+                    var effectiveCodexWslDistro = ResolveCodexPoolWslDistro(codexWslDistro);
+
                     if (SerenaMcpSettings.IsEnabled(config))
                     {
                         try
                         {
                             var (resolvedSerena, installedMessage) =
-                                await SerenaMcpSettings.EnsureCommandAvailableAsync(config.Serena, ct);
+                                await SerenaMcpSettings.EnsureCommandAvailableAsync(
+                                    config.Serena,
+                                    effectiveCodexWslDistro,
+                                    ct);
                             config = config with { Serena = resolvedSerena };
                             if (!string.IsNullOrWhiteSpace(installedMessage))
                                 AnsiConsole.MarkupLine($"[green]{Markup.Escape(installedMessage)}[/]");
@@ -354,7 +359,7 @@ internal static class Program
                         codexPool = await CodexAppServerPool.StartAsync(
                             effectivePoolSize,
                             baseEndpoint,
-                            codexWslDistro,
+                            effectiveCodexWslDistro,
                             ct,
                             workingDirectory: Path.GetDirectoryName(solutionPath),
                             serena: config.Serena);
@@ -1110,6 +1115,18 @@ internal static class Program
         }
 
         return "ws://127.0.0.1:8080";
+    }
+
+    private static string? ResolveCodexPoolWslDistro(string? codexWslDistro)
+    {
+        if (!OperatingSystem.IsWindows())
+            return codexWslDistro;
+
+        var distro = string.IsNullOrWhiteSpace(codexWslDistro)
+            ? Environment.GetEnvironmentVariable("CODEX_POOL_WSL_DISTRO")
+            : codexWslDistro;
+
+        return string.IsNullOrWhiteSpace(distro) ? "Ubuntu" : distro.Trim();
     }
 
     private static bool ShouldAutoStartCodexPool(LlmConfig config)
