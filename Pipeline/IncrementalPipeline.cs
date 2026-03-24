@@ -9,6 +9,7 @@ using Code2Obsidian.Incremental;
 using Code2Obsidian.Loading;
 using LibGit2Sharp;
 using Microsoft.CodeAnalysis;
+using Microsoft.Extensions.FileSystemGlobbing;
 
 namespace Code2Obsidian.Pipeline;
 
@@ -82,8 +83,10 @@ public sealed class IncrementalPipeline
         var result = new PipelineResult();
         var sw = Stopwatch.StartNew();
 
-        // Count total .cs documents for progress denominator
-        int totalDocuments = CountCSharpDocuments();
+        // Count distinct analyzable source files so incremental progress and
+        // summaries reflect unique files rather than duplicated Roslyn documents
+        // from multi-targeted projects.
+        int totalDocuments = CountDistinctAnalyzableCSharpFiles();
 
         // Step 1: Change detection -- git-primary with hash fallback
         _progress?.Report(new PipelineProgress(
@@ -145,7 +148,7 @@ public sealed class IncrementalPipeline
             RenameVaultNotes(oldAbsPath, newAbsPath, solutionDir);
         }
 
-        int analyzeCount = absoluteChangedFiles.Count;
+        int analyzeCount = CountDistinctAnalyzableCSharpFiles(absoluteChangedFiles);
 
         _progress?.Report(new PipelineProgress(
             PipelineStage.Analyzing,
@@ -188,9 +191,9 @@ public sealed class IncrementalPipeline
 
             _progress?.Report(new PipelineProgress(
                 PipelineStage.Analyzing,
-                $"Ripple expanded to {expandedFilter.Count} files, reanalyzing...",
+                $"Ripple expanded to {CountDistinctAnalyzableCSharpFiles(expandedFilter)} files, reanalyzing...",
                 analyzeCount,
-                expandedFilter.Count));
+                CountDistinctAnalyzableCSharpFiles(expandedFilter)));
 
             var pass2Analyzers = new List<IAnalyzer>
             {
@@ -203,7 +206,7 @@ public sealed class IncrementalPipeline
                 await analyzer.AnalyzeAsync(_context, pass2Builder, _progress, ct);
             }
             freshAnalysis = pass2Builder.Build();
-            analyzeCount = expandedFilter.Count;
+            analyzeCount = CountDistinctAnalyzableCSharpFiles(expandedFilter);
         }
         else
         {
@@ -212,7 +215,7 @@ public sealed class IncrementalPipeline
 
         result.AnalysisDuration = sw.Elapsed;
         result.FilesAnalyzed = analyzeCount;
-        result.FilesSkipped = totalDocuments - analyzeCount;
+        result.FilesSkipped = Math.Max(0, totalDocuments - analyzeCount);
         result.ProjectsAnalyzed = freshAnalysis.ProjectCount;
 
         // Explicitly complete the analysis stage before switching to enrichment.
@@ -233,6 +236,7 @@ public sealed class IncrementalPipeline
 
         var reanalyzedFileSet = new HashSet<string>(affectedFiles, StringComparer.OrdinalIgnoreCase);
         var llmDirtyFileSet = new HashSet<string>(absoluteChangedFiles, StringComparer.OrdinalIgnoreCase);
+        var emitFileSet = new HashSet<string>(reanalyzedFileSet, StringComparer.OrdinalIgnoreCase);
         var mergedAnalysis = AnalysisResultMerger.Merge(freshAnalysis, state, reanalyzedFileSet);
 
         // Enrichment pass - only enrich entities in dirty files (incremental mode)
@@ -246,6 +250,11 @@ public sealed class IncrementalPipeline
             // but they don't trigger fresh enrichment calls by default.
             if (enricher is LlmEnricher llm)
             {
+                var (backfillEnrichmentFiles, backfillEmissionFiles) =
+                    DetermineIncrementalBackfillFiles(mergedAnalysis, state, llm);
+                llmDirtyFileSet.UnionWith(backfillEnrichmentFiles);
+                emitFileSet.UnionWith(backfillEmissionFiles);
+
                 enricher = new LlmEnricher(
                     llm.Client,
                     llm.Cache,
@@ -280,11 +289,11 @@ public sealed class IncrementalPipeline
         // Step 6: Selective emission -- only write notes for dirty files
         _progress?.Report(new PipelineProgress(
             PipelineStage.Emitting,
-            $"Emitting notes for {analyzeCount} affected files...",
+            $"Emitting notes for {emitFileSet.Count} files...",
             0,
-            analyzeCount));
+            emitFileSet.Count));
 
-        var emitter = new ObsidianEmitter(_fanInThreshold, _complexityThreshold, dirtyFiles: reanalyzedFileSet);
+        var emitter = new ObsidianEmitter(_fanInThreshold, _complexityThreshold, dirtyFiles: emitFileSet);
         var emitResult = await emitter.EmitAsync(enrichedResult, _outputDirectory, ct);
 
         result.NotesGenerated = emitResult.NotesWritten;
@@ -344,7 +353,7 @@ public sealed class IncrementalPipeline
         var result = new PipelineResult();
         var sw = Stopwatch.StartNew();
 
-        int totalDocuments = CountCSharpDocuments();
+        int totalDocuments = CountDistinctAnalyzableCSharpFiles();
 
         // Step 1: Change detection
         _progress?.Report(new PipelineProgress(
@@ -409,23 +418,26 @@ public sealed class IncrementalPipeline
         var staleNotes = StaleNoteDetector.FindStaleNotes(storedNotes, currentEntityIds, reanalyzedFileSet);
 
         result.AnalysisDuration = sw.Elapsed;
-        result.FilesAnalyzed = absoluteChangedFiles.Count;
-        result.FilesSkipped = totalDocuments - absoluteChangedFiles.Count;
+        var changedFileCount = CountDistinctAnalyzableCSharpFiles(absoluteChangedFiles);
+        var affectedFileCount = CountDistinctAnalyzableCSharpFiles(reanalyzedFileSet);
+
+        result.FilesAnalyzed = changedFileCount;
+        result.FilesSkipped = Math.Max(0, totalDocuments - changedFileCount);
         result.NotesGenerated = 0; // Dry run: nothing written
         result.NotesDeleted = staleNotes.Count; // Would be deleted
         result.WasIncremental = true;
 
         // Report summary
         var summary = new System.Text.StringBuilder();
-        summary.AppendLine($"Dry run: {absoluteChangedFiles.Count} changed files detected");
-        summary.AppendLine($"  Ripple expands to {affectedFiles.Count} affected files");
+        summary.AppendLine($"Dry run: {changedFileCount} changed files detected");
+        summary.AppendLine($"  Ripple expands to {affectedFileCount} affected files");
         summary.AppendLine($"  {staleNotes.Count} stale notes would be deleted");
-        summary.AppendLine($"  {totalDocuments - affectedFiles.Count} files would be skipped");
+        summary.AppendLine($"  {Math.Max(0, totalDocuments - affectedFileCount)} files would remain unchanged");
         result.Warnings.Add(summary.ToString());
 
         _progress?.Report(new PipelineProgress(
             PipelineStage.Emitting,
-            $"Dry run complete: {affectedFiles.Count} files would be regenerated",
+            $"Dry run complete: {affectedFileCount} files would be regenerated",
             1,
             1));
 
@@ -607,19 +619,50 @@ public sealed class IncrementalPipeline
     // -----------------------------------------------------------------------
 
     /// <summary>
-    /// Counts total C# documents across all projects in the solution.
+    /// Counts distinct analyzable C# file paths across all projects in the solution.
+    /// This deduplicates documents that appear multiple times because a project targets
+    /// multiple TFMs, and applies the same cheap path-level filters used by analyzers.
     /// </summary>
-    private int CountCSharpDocuments()
+    private int CountDistinctAnalyzableCSharpFiles(IReadOnlySet<string>? fileFilter = null)
     {
-        int count = 0;
+        var solutionRoot = Path.GetDirectoryName(_context.Solution.FilePath) ?? Directory.GetCurrentDirectory();
+        Matcher? excludeMatcher = null;
+        if (_excludePatterns is { Length: > 0 })
+        {
+            excludeMatcher = new Matcher();
+            excludeMatcher.AddIncludePatterns(_excludePatterns);
+        }
+
+        var filePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var project in _context.Solution.Projects)
         {
-            if (project.Language == LanguageNames.CSharp)
+            if (project.Language != LanguageNames.CSharp)
+                continue;
+
+            foreach (var document in project.Documents)
             {
-                count += project.Documents.Count();
+                var filePath = document.FilePath;
+                if (string.IsNullOrWhiteSpace(filePath))
+                    continue;
+
+                if (fileFilter is not null && !fileFilter.Contains(filePath))
+                    continue;
+
+                if (AnalysisHelpers.IsGeneratedFilePath(filePath))
+                    continue;
+
+                if (excludeMatcher is not null)
+                {
+                    var normalizedPath = filePath.Replace('\\', '/');
+                    if (excludeMatcher.Match(solutionRoot, normalizedPath).HasMatches)
+                        continue;
+                }
+
+                filePaths.Add(filePath);
             }
         }
-        return count;
+
+        return filePaths.Count;
     }
 
     // -----------------------------------------------------------------------
@@ -876,6 +919,201 @@ public sealed class IncrementalPipeline
             typeFiles.Add((type.Id.Value, type.FilePath));
         }
         return typeFiles;
+    }
+
+    private static (HashSet<string> EnrichmentFiles, HashSet<string> EmissionFiles) DetermineIncrementalBackfillFiles(
+        AnalysisResult analysis,
+        IncrementalState state,
+        LlmEnricher llm)
+    {
+        var enrichmentFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var emissionFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var notePathsByEntityId = state.GetEmittedNotes()
+            .ToDictionary(kvp => kvp.Value.EntityId, kvp => kvp.Key, StringComparer.Ordinal);
+        var noteTextCache = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var (methodId, method) in analysis.Methods)
+        {
+            var cached = TryGetCachedMethodEnrichment(llm.Cache, analysis, method);
+            EvaluateBackfillNeeds(
+                method.FilePath,
+                methodId.Value,
+                isMethod: true,
+                cached,
+                llm.IncludeSummary,
+                llm.IncludeSuggestions,
+                notePathsByEntityId,
+                noteTextCache,
+                enrichmentFiles,
+                emissionFiles);
+        }
+
+        foreach (var (typeId, type) in analysis.Types)
+        {
+            var cached = llm.Cache.TryGet(typeId.Value, ContentHasher.ComputeTypeHash(type));
+            EvaluateBackfillNeeds(
+                type.FilePath,
+                typeId.Value,
+                isMethod: false,
+                cached,
+                llm.IncludeSummary,
+                llm.IncludeSuggestions,
+                notePathsByEntityId,
+                noteTextCache,
+                enrichmentFiles,
+                emissionFiles);
+        }
+
+        return (enrichmentFiles, emissionFiles);
+    }
+
+    private static EnrichmentResponse? TryGetCachedMethodEnrichment(
+        SummaryCache cache,
+        AnalysisResult analysis,
+        MethodInfo method)
+    {
+        var hash = ContentHasher.ComputeMethodHash(method, analysis.CallGraph);
+        var cached = cache.TryGet(method.Id.Value, hash);
+        if (cached is not null)
+            return cached;
+
+        var legacyHash = ContentHasher.ComputeLegacyMethodHash(method, analysis.CallGraph);
+        return string.Equals(hash, legacyHash, StringComparison.Ordinal)
+            ? null
+            : cache.TryGet(method.Id.Value, legacyHash);
+    }
+
+    private static void EvaluateBackfillNeeds(
+        string sourceFile,
+        string entityId,
+        bool isMethod,
+        EnrichmentResponse? cached,
+        bool includeSummary,
+        bool includeSuggestions,
+        IReadOnlyDictionary<string, string> notePathsByEntityId,
+        IDictionary<string, string> noteTextCache,
+        ISet<string> enrichmentFiles,
+        ISet<string> emissionFiles)
+    {
+        if (!HasRequestedModes(cached, includeSummary, includeSuggestions))
+        {
+            enrichmentFiles.Add(sourceFile);
+            emissionFiles.Add(sourceFile);
+            return;
+        }
+
+        if (!notePathsByEntityId.TryGetValue(entityId, out var notePath))
+        {
+            emissionFiles.Add(sourceFile);
+            return;
+        }
+
+        if (NoteNeedsBackfill(notePath, isMethod, cached!, includeSummary, includeSuggestions, noteTextCache))
+            emissionFiles.Add(sourceFile);
+    }
+
+    private static bool HasRequestedModes(EnrichmentResponse? response, bool includeSummary, bool includeSuggestions)
+    {
+        if (response is null)
+            return false;
+
+        var hasSummary = !includeSummary || HasSummary(response);
+        var hasSuggestions = !includeSuggestions || HasSuggestions(response);
+        return hasSummary && hasSuggestions;
+    }
+
+    private static bool HasSummary(EnrichmentResponse response) =>
+        !string.IsNullOrWhiteSpace(response.Summary) || !string.IsNullOrWhiteSpace(response.Purpose);
+
+    private static bool HasSuggestions(EnrichmentResponse response) =>
+        !string.IsNullOrWhiteSpace(response.Improvements);
+
+    private static bool NoteNeedsBackfill(
+        string notePath,
+        bool isMethod,
+        EnrichmentResponse cached,
+        bool includeSummary,
+        bool includeSuggestions,
+        IDictionary<string, string> noteTextCache)
+    {
+        if (!File.Exists(notePath))
+            return true;
+
+        if (!noteTextCache.TryGetValue(notePath, out var noteText))
+        {
+            try
+            {
+                noteText = File.ReadAllText(notePath);
+            }
+            catch
+            {
+                return true;
+            }
+
+            noteTextCache[notePath] = noteText;
+        }
+
+        if (includeSummary && HasSummary(cached) && !NoteContainsSummary(noteText, cached, isMethod))
+            return true;
+
+        if (includeSuggestions && HasSuggestions(cached) && !NoteContainsSuggestions(noteText, cached, isMethod))
+            return true;
+
+        return false;
+    }
+
+    private static bool NoteContainsSummary(string noteText, EnrichmentResponse cached, bool isMethod)
+    {
+        if (!string.IsNullOrWhiteSpace(cached.Purpose) &&
+            !noteText.Contains($"**{cached.Purpose.Trim()}**", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(cached.Summary))
+        {
+            var summary = cached.Summary.Trim();
+            var renderedSummaryLine = isMethod ? $"- {summary}" : summary;
+            if (!noteText.Contains(renderedSummaryLine, StringComparison.Ordinal))
+                return false;
+        }
+
+        return !isMethod || !noteText.Contains("- _TODO: Plain-English walkthrough._", StringComparison.Ordinal);
+    }
+
+    private static bool NoteContainsSuggestions(string noteText, EnrichmentResponse cached, bool isMethod)
+    {
+        if (!isMethod && !noteText.Contains("## Improvements", StringComparison.Ordinal))
+            return false;
+
+        if (isMethod && noteText.Contains("- _TODO: Suggested optimizations._", StringComparison.Ordinal))
+            return false;
+
+        foreach (var line in NormalizeImprovementLines(cached.Improvements))
+        {
+            if (!noteText.Contains(line, StringComparison.Ordinal))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static IReadOnlyList<string> NormalizeImprovementLines(string raw)
+    {
+        var lines = raw
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(line => !string.IsNullOrWhiteSpace(line))
+            .Select(line =>
+            {
+                var trimmed = line.Trim();
+                return trimmed.StartsWith("- ", StringComparison.Ordinal) ||
+                       trimmed.StartsWith("* ", StringComparison.Ordinal)
+                    ? trimmed
+                    : $"- {trimmed}";
+            })
+            .ToList();
+
+        return lines;
     }
 
     private static Dictionary<string, (string SourceFile, string EntityId)> BuildEmittedNotes(

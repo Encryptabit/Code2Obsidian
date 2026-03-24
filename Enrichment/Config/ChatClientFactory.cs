@@ -33,12 +33,18 @@ public static class ChatClientFactory
     public static IChatClient CreateFromConfig(
         LlmConfig config,
         Action<Uri, string>? codexEndpointUnavailable = null,
-        string? solutionDirectory = null)
+        string? solutionDirectory = null,
+        Func<Uri, string, CancellationToken, Task>? codexEndpointRecycle = null)
     {
         var apiKey = ResolveApiKey(config);
 
         if (config.Provider.Equals("codex", StringComparison.OrdinalIgnoreCase))
-            return CreateCodexClient(config, apiKey, codexEndpointUnavailable, solutionDirectory);
+            return CreateCodexClient(
+                config,
+                apiKey,
+                codexEndpointUnavailable,
+                solutionDirectory,
+                codexEndpointRecycle);
 
         if (KnownProviders.TryGetValue(config.Provider, out var factory))
         {
@@ -96,17 +102,22 @@ public static class ChatClientFactory
     }
 
     private static IChatClient CreateCodexClient(LlmConfig config, string _) =>
-        CreateCodexClient(config, _, null, null);
+        CreateCodexClient(config, _, null, null, null);
 
     private static IChatClient CreateCodexClient(
         LlmConfig config,
         string _,
         Action<Uri, string>? onEndpointUnavailable,
-        string? cwd)
+        string? cwd,
+        Func<Uri, string, CancellationToken, Task>? onEndpointRecycleRequested)
     {
         var endpointUris = ResolveCodexEndpoints(config)
             .Select(endpoint => new Uri(endpoint))
             .ToArray();
+
+        var restartEndpointAfterTurns = ResolveCodexEndpointRestartAfterTurns(
+            config,
+            onEndpointRecycleRequested is not null);
 
         if (endpointUris.Length == 1)
         {
@@ -119,7 +130,9 @@ public static class ChatClientFactory
                 serviceTier: config.ServiceTier,
                 cwd: cwd,
                 allowCommandExecution: !SerenaMcpSettings.IsEnabled(config),
-                resetConnectionAfterTurn: SerenaMcpSettings.IsEnabled(config));
+                resetConnectionAfterTurn: ShouldResetCodexConnectionAfterTurn(config),
+                onEndpointRecycleRequested: onEndpointRecycleRequested,
+                restartEndpointAfterTurns: restartEndpointAfterTurns);
         }
 
         var pooledClients = endpointUris
@@ -132,9 +145,37 @@ public static class ChatClientFactory
                 serviceTier: config.ServiceTier,
                 cwd: cwd,
                 allowCommandExecution: !SerenaMcpSettings.IsEnabled(config),
-                resetConnectionAfterTurn: SerenaMcpSettings.IsEnabled(config)))
+                resetConnectionAfterTurn: ShouldResetCodexConnectionAfterTurn(config),
+                onEndpointRecycleRequested: onEndpointRecycleRequested,
+                restartEndpointAfterTurns: restartEndpointAfterTurns))
             .ToArray();
         return new RoundRobinChatClient(pooledClients);
+    }
+
+    private static bool ShouldResetCodexConnectionAfterTurn(LlmConfig config)
+    {
+        if (!SerenaMcpSettings.IsEnabled(config))
+            return false;
+
+        // Reconnecting after every Serena turn can spawn a fresh Serena/Roslyn
+        // stack per websocket session. Keep sessions warm by default and make the
+        // old behavior opt-in for debugging.
+        return string.Equals(
+            Environment.GetEnvironmentVariable("CODEX_RESET_CONNECTION_AFTER_TURN"),
+            "1",
+            StringComparison.Ordinal);
+    }
+
+    private static int ResolveCodexEndpointRestartAfterTurns(LlmConfig config, bool canRecycleManagedEndpoints)
+    {
+        if (!canRecycleManagedEndpoints || !SerenaMcpSettings.IsEnabled(config))
+            return 0;
+
+        var raw = Environment.GetEnvironmentVariable("CODEX_RESTART_ENDPOINT_AFTER_TURNS");
+        if (string.IsNullOrWhiteSpace(raw))
+            return 1;
+
+        return int.TryParse(raw, out var parsed) && parsed > 0 ? parsed : 0;
     }
 
     private static IReadOnlyList<string> ResolveCodexEndpoints(LlmConfig config)

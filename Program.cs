@@ -446,6 +446,7 @@ internal static class Program
                 // Create IChatClient
                 IChatClient client;
                 Action<Uri, string>? codexEndpointUnavailable = null;
+                Func<Uri, string, CancellationToken, Task>? codexEndpointRecycle = null;
                 if (codexPool is not null &&
                     config.Provider.Equals("codex", StringComparison.OrdinalIgnoreCase))
                 {
@@ -457,11 +458,22 @@ internal static class Program
                             CodexLogBoard.Report(endpoint.ToString(), $"restart request ignored ({reason})");
                         }
                     };
+                    codexEndpointRecycle = async (endpoint, reason, token) =>
+                    {
+                        var restarted = await codexPool.RequestRestartAndWaitAsync(endpoint.ToString(), reason, token);
+                        if (!restarted)
+                        {
+                            CodexLogBoard.Report(endpoint.ToString(), $"recycle request ignored ({reason})");
+                        }
+                    };
                 }
                 try
                 {
-                    client = ChatClientFactory.CreateFromConfig(config, codexEndpointUnavailable,
-                        solutionDirectory: Path.GetDirectoryName(solutionPath));
+                    client = ChatClientFactory.CreateFromConfig(
+                        config,
+                        codexEndpointUnavailable,
+                        solutionDirectory: Path.GetDirectoryName(solutionPath),
+                        codexEndpointRecycle: codexEndpointRecycle);
                     llmClient = client;
                 }
                 catch (InvalidOperationException ex)
@@ -1298,7 +1310,7 @@ internal static class Program
             .AddColumn("Items");
 
         var analysisItems = result.WasIncremental
-            ? $"{result.FilesAnalyzed} files ({result.FilesSkipped} skipped)"
+            ? $"{result.FilesAnalyzed} files ({result.FilesSkipped} unchanged)"
             : $"{result.ProjectsAnalyzed} projects, {result.FilesAnalyzed} files";
 
         table.AddRow(

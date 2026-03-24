@@ -563,6 +563,12 @@ public static class SerenaMcpSettings
         IReadOnlyDictionary<string, string>? env,
         CancellationToken ct)
     {
+        var scriptPath = Path.Combine(
+            Path.GetTempPath(),
+            $"code2obsidian-serena-{Guid.NewGuid():N}.sh");
+        var scriptBody = PrependWslExports(script, env).Replace("\r\n", "\n", StringComparison.Ordinal);
+        await File.WriteAllTextAsync(scriptPath, scriptBody, ct);
+
         var psi = new ProcessStartInfo
         {
             FileName = "wsl.exe",
@@ -578,16 +584,30 @@ public static class SerenaMcpSettings
         }
 
         psi.ArgumentList.Add("bash");
-        psi.ArgumentList.Add("-lc");
-        psi.ArgumentList.Add(PrependWslExports(script, env));
+        psi.ArgumentList.Add(ToWslPath(scriptPath));
 
-        using var process = new Process { StartInfo = psi };
-        process.Start();
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
-        var stderrTask = process.StandardError.ReadToEndAsync(ct);
-        await process.WaitForExitAsync(ct);
+        try
+        {
+            using var process = new Process { StartInfo = psi };
+            process.Start();
+            var stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
+            var stderrTask = process.StandardError.ReadToEndAsync(ct);
+            await process.WaitForExitAsync(ct);
 
-        return (process.ExitCode, await stdoutTask, await stderrTask);
+            return (process.ExitCode, await stdoutTask, await stderrTask);
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(scriptPath))
+                    File.Delete(scriptPath);
+            }
+            catch
+            {
+                // best-effort cleanup
+            }
+        }
     }
 
     private static string PrependWslExports(string script, IReadOnlyDictionary<string, string>? env)
@@ -604,6 +624,23 @@ public static class SerenaMcpSettings
 
     private static string BashSingleQuote(string value) =>
         "'" + value.Replace("'", "'\"'\"'", StringComparison.Ordinal) + "'";
+
+    private static string ToWslPath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            throw new ArgumentException("Path is required.", nameof(path));
+
+        var fullPath = Path.GetFullPath(path);
+        if (fullPath.Length >= 3 && fullPath[1] == ':' &&
+            (fullPath[2] == '\\' || fullPath[2] == '/'))
+        {
+            var drive = char.ToLowerInvariant(fullPath[0]);
+            var remainder = fullPath[3..].Replace('\\', '/');
+            return $"/mnt/{drive}/{remainder}";
+        }
+
+        return fullPath.Replace('\\', '/');
+    }
 
     private static string ToTomlArray(IEnumerable<string> values) =>
         "[" + string.Join(", ", values.Select(ToTomlString)) + "]";

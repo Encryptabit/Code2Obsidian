@@ -29,7 +29,8 @@ public static class PromptBuilder
             "Analyze the code entity, then respond ONLY with these XML tags:",
             "Use tools only to inspect the target symbol and the supporting evidence needed for the answer.",
             "Start from the provided Source file and stay within the provided Analysis root.",
-            "Treat prompt-provided analysis facts as authoritative."
+            "Treat prompt-provided analysis facts as authoritative.",
+            "Do not present unverified architectural assumptions as facts."
         };
 
         if (preferSerenaSymbolLookup)
@@ -49,7 +50,7 @@ public static class PromptBuilder
 
         if (includeSummary)
         {
-            lines.Add("<summary>1-4 sentence technical summary for experienced developers. Reference implementation details.</summary>");
+            lines.Add("<summary>1-4 sentence technical summary for experienced developers. Reference implementation details you directly observed.</summary>");
             lines.Add("<purpose>Single sentence describing what this code does.</purpose>");
             lines.Add("<tags>comma-separated: entry-point, data-access, async, utility, factory, DI, validation, error-handling</tags>");
         }
@@ -60,6 +61,9 @@ public static class PromptBuilder
             lines.Add("  - Be specific to THIS code, not generic advice (no boilerplate null checks, no 'add unit tests' unless a concrete gap exists).");
             lines.Add("  - Identify a real problem: correctness bug, performance issue, maintainability concern, or missed simplification.");
             lines.Add("  - State what to change and why it matters (e.g., 'Replace GroupBy+First with a single pass — current code is O(n log n) for a task that is O(n)').");
+            lines.Add("  - Be supported by code you directly observed in the target symbol or in explicitly inspected supporting symbols. If you cannot point to the code path that proves the issue, omit the suggestion.");
+            lines.Add("  - Do not assume hidden DI/unit-of-work/context/ORM behavior, implicit filters, lazy loading, or framework conventions unless the inspected code shows them.");
+            lines.Add("  - If a claim depends on another method, query, mapping, or helper, inspect that symbol first; otherwise do not mention the claim.");
             lines.Add("  - Skip suggestions the code already handles correctly. If the code is clean, return fewer bullets rather than padding with low-value advice.");
             lines.Add("</improvements>");
         }

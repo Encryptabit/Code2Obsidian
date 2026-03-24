@@ -156,6 +156,31 @@ public sealed class CodexAppServerPool : IAsyncDisposable, IDisposable
         return true;
     }
 
+    /// <summary>
+    /// Requests a forced restart and waits for the replacement endpoint to become reachable.
+    /// Returns false only when the endpoint is not tracked by this pool.
+    /// </summary>
+    public async Task<bool> RequestRestartAndWaitAsync(string endpoint, string reason, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(endpoint))
+            return false;
+
+        var normalized = NormalizeEndpoint(endpoint);
+        bool tracked;
+        lock (_gate)
+        {
+            tracked = _processesByEndpoint.ContainsKey(normalized) ||
+                      _processesByEndpoint.ContainsKey(endpoint.Trim());
+        }
+
+        if (!tracked)
+            return false;
+
+        _ = RequestRestart(endpoint, reason);
+        await WaitForEndpointAsync(normalized, ct);
+        return true;
+    }
+
     private void StartAndTrackServer(string endpoint, SerenaMcpConfig? serena)
     {
         var process = StartServer(endpoint, _wslDistro, OnProcessExited, _workingDirectory, serena);

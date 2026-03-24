@@ -8,8 +8,8 @@ namespace Code2Obsidian.Enrichment.Config;
 
 /// <summary>
 /// IChatClient implementation that speaks the Codex JSON-RPC-over-WebSocket protocol.
-/// Starts a fresh Codex thread per turn, and can recycle the websocket session
-/// between turns to bound app-server memory during tool-heavy workflows.
+/// Starts a fresh Codex thread per turn, and can optionally recycle the websocket
+/// session between turns when connection churn is acceptable.
 /// File change approvals are always denied, and shell command approvals can be
 /// disabled to enforce Serena-first enrichment.
 /// </summary>
@@ -56,11 +56,14 @@ public sealed class CodexChatClient : IChatClient, IDisposable
     private readonly bool _traceWs;
     private readonly bool _allowCommandExecution;
     private readonly bool _resetConnectionAfterTurn;
+    private readonly Func<Uri, string, CancellationToken, Task>? _onEndpointRecycleRequested;
+    private readonly int _restartEndpointAfterTurns;
     private readonly Action<Uri, string>? _onEndpointUnavailable;
     private readonly SemaphoreSlim _turnLock = new(1, 1);
 
     private ClientWebSocket? _ws;
     private int _nextId = 1;
+    private int _completedTurns;
     private bool _disposed;
     private bool _initialized;
 
@@ -73,7 +76,9 @@ public sealed class CodexChatClient : IChatClient, IDisposable
         string? serviceTier = null,
         string? cwd = null,
         bool allowCommandExecution = true,
-        bool resetConnectionAfterTurn = false)
+        bool resetConnectionAfterTurn = false,
+        Func<Uri, string, CancellationToken, Task>? onEndpointRecycleRequested = null,
+        int restartEndpointAfterTurns = 0)
     {
         _endpoint = endpoint;
         _model = model;
@@ -83,6 +88,8 @@ public sealed class CodexChatClient : IChatClient, IDisposable
         _traceWs = traceWs;
         _allowCommandExecution = allowCommandExecution;
         _resetConnectionAfterTurn = resetConnectionAfterTurn;
+        _onEndpointRecycleRequested = onEndpointRecycleRequested;
+        _restartEndpointAfterTurns = Math.Max(0, restartEndpointAfterTurns);
         _onEndpointUnavailable = onEndpointUnavailable;
     }
 
@@ -94,9 +101,12 @@ public sealed class CodexChatClient : IChatClient, IDisposable
         CancellationToken cancellationToken = default)
     {
         await _turnLock.WaitAsync(cancellationToken);
+        var turnSucceeded = false;
         try
         {
-            return await GetResponseInternalAsync(chatMessages, cancellationToken);
+            var response = await GetResponseInternalAsync(chatMessages, cancellationToken);
+            turnSucceeded = true;
+            return response;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -109,7 +119,11 @@ public sealed class CodexChatClient : IChatClient, IDisposable
         }
         finally
         {
-            if (_resetConnectionAfterTurn && !_disposed)
+            var endpointRecycled = false;
+            if (turnSucceeded && !_disposed)
+                endpointRecycled = await MaybeRecycleEndpointAfterTurnAsync(cancellationToken);
+
+            if (_resetConnectionAfterTurn && !_disposed && !endpointRecycled)
                 ResetConnection();
             _turnLock.Release();
         }
@@ -596,6 +610,42 @@ public sealed class CodexChatClient : IChatClient, IDisposable
     {
         var raw = Environment.GetEnvironmentVariable(name);
         return int.TryParse(raw, out var parsed) && parsed > 0 ? parsed : fallback;
+    }
+
+    private async Task<bool> MaybeRecycleEndpointAfterTurnAsync(CancellationToken cancellationToken)
+    {
+        if (_restartEndpointAfterTurns <= 0 || _onEndpointRecycleRequested is null)
+            return false;
+
+        var completedTurns = Interlocked.Increment(ref _completedTurns);
+        if (completedTurns % _restartEndpointAfterTurns != 0)
+            return false;
+
+        ResetConnection();
+        CodexLogBoard.Report(
+            _endpoint.ToString(),
+            $"recycling endpoint after {completedTurns} successful turn(s)");
+
+        try
+        {
+            using var recycleCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            recycleCts.CancelAfter(TimeSpan.FromSeconds(30));
+            await _onEndpointRecycleRequested(
+                _endpoint,
+                $"successful turn budget reached ({_restartEndpointAfterTurns})",
+                recycleCts.Token);
+            CodexLogBoard.Report(_endpoint.ToString(), "endpoint recycle complete");
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            CodexLogBoard.Report(_endpoint.ToString(), "endpoint recycle timed out");
+        }
+        catch (Exception ex)
+        {
+            CodexLogBoard.Report(_endpoint.ToString(), $"endpoint recycle failed: {ex.Message}");
+        }
+
+        return true;
     }
 
     private void ReportEndpointUnavailable(Exception ex)
