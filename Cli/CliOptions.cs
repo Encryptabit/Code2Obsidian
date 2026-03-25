@@ -11,12 +11,12 @@ namespace Code2Obsidian.Cli;
 /// DryRun shows what would be regenerated without writing files.
 /// Enrich enables LLM-powered plain-English summaries for methods and classes.
 /// Suggestions enables LLM-powered optimization/refactor suggestions.
-/// LlmProvider overrides the LLM provider from the config file (anthropic, openai, ollama, codex).
+/// LlmProvider overrides the LLM provider from the config file (anthropic, claude-code, openai, ollama, codex); claude-code uses the local `claude` CLI auth session.
 /// LlmModel overrides the LLM model name from the config file.
 /// LlmApiKey overrides the LLM API key from the config file (or $ENV_VAR reference).
-/// LlmEndpoint overrides the LLM endpoint URL from the config file.
+/// LlmEndpoint overrides the LLM endpoint URL from the config file for endpoint-backed providers only (codex, ollama, and custom endpoint-compatible providers).
 /// CodexWslDistro selects the WSL distro to launch Codex app-server instances in (Windows only).
-/// PoolSize spawns that many local Codex app-server instances (codex provider only).
+/// PoolSize spawns that many managed workers for providers that support pooling (Codex app-server endpoints, claude-code local process lanes).
 /// TraceCodexWs enables Codex websocket frame tracing to stderr.
 /// </summary>
 public sealed record CliOptions(

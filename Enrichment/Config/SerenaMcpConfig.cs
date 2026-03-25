@@ -1,10 +1,11 @@
 using System.Diagnostics;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Code2Obsidian.Enrichment.Config;
 
 /// <summary>
-/// Optional Serena MCP configuration for Codex-backed enrichment runs.
+/// Optional Serena MCP configuration for provider-backed enrichment runs.
 /// Defaults are tuned for headless batch analysis: no dashboard, no onboarding,
 /// and project auto-detection from the working directory.
 /// </summary>
@@ -108,6 +109,41 @@ public static class SerenaMcpSettings
         }
 
         return overrides;
+    }
+
+    public static string BuildClaudeMcpConfigJson(SerenaMcpConfig? config)
+    {
+        var normalized = RequireEnabledHostConfig(config);
+
+        var payload = new ClaudeMcpConfigDocument(
+            new Dictionary<string, ClaudeMcpServerConfig>(StringComparer.Ordinal)
+            {
+                [ServerName] = new(
+                    normalized.Command!,
+                    ResolveArgs(normalized),
+                    normalized.Env)
+            });
+
+        return JsonSerializer.Serialize(payload);
+    }
+
+    public static SerenaMcpConfig RequireEnabledHostConfig(SerenaMcpConfig? config)
+    {
+        var normalized = Normalize(config);
+        if (normalized?.Enabled != true)
+        {
+            throw new InvalidOperationException(
+                "Claude MCP config requires 'serena.enabled' to be true.");
+        }
+
+        var command = normalized.Command!;
+        if (IsCommandAvailable(command, normalized.Env))
+            return normalized;
+
+        throw new InvalidOperationException(
+            $"Serena MCP command '{command}' was not found on the local host. " +
+            "Claude Code launches MCP servers from the host process, so install the command on the host PATH, " +
+            "set 'serena.command' to an absolute host-accessible executable path, or provide a host PATH override in 'serena.env'.");
     }
 
     public static IReadOnlyList<string> ResolveArgs(SerenaMcpConfig config)
@@ -641,6 +677,15 @@ public static class SerenaMcpSettings
 
         return fullPath.Replace('\\', '/');
     }
+
+    private sealed record ClaudeMcpConfigDocument(
+        [property: JsonPropertyName("mcpServers")]
+        IReadOnlyDictionary<string, ClaudeMcpServerConfig> McpServers);
+
+    private sealed record ClaudeMcpServerConfig(
+        [property: JsonPropertyName("command")] string Command,
+        [property: JsonPropertyName("args")] IReadOnlyList<string> Args,
+        [property: JsonPropertyName("env")] IReadOnlyDictionary<string, string>? Env);
 
     private static string ToTomlArray(IEnumerable<string> values) =>
         "[" + string.Join(", ", values.Select(ToTomlString)) + "]";

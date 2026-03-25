@@ -82,7 +82,7 @@ internal static class Program
 
         var llmProviderOption = new Option<string?>("--llm-provider")
         {
-            Description = "LLM provider (anthropic, openai, ollama, codex, or custom with --llm-endpoint)"
+            Description = $"LLM provider ({LlmProviderCatalog.FormatKnownProviders()}; use --llm-endpoint only for endpoint-backed/custom providers, and use local `claude` CLI auth for claude-code)"
         };
 
         var llmModelOption = new Option<string?>("--llm-model")
@@ -97,7 +97,7 @@ internal static class Program
 
         var llmEndpointOption = new Option<string?>("--llm-endpoint")
         {
-            Description = "LLM endpoint URL (Codex supports comma/semicolon-separated endpoints for pooling)"
+            Description = "LLM endpoint URL for endpoint-backed providers (codex/ollama/custom); claude-code uses local `claude` CLI auth instead"
         };
 
         var codexWslDistroOption = new Option<string?>("--codex-wsl-distro")
@@ -107,7 +107,7 @@ internal static class Program
 
         var poolSizeOption = new Option<int?>("--pool-size")
         {
-            Description = "Spawn N local Codex app-server instances (codex provider only)"
+            Description = "Spawn N managed workers for providers that support managed pooling (codex app-server endpoints, claude-code local process lanes)"
         };
 
         var traceCodexWsOption = new Option<bool>("--trace-codex-ws")
@@ -187,6 +187,7 @@ internal static class Program
         CancellationToken ct)
     {
         CodexAppServerPool? codexPool = null;
+        ClaudeCodeProcessPool? claudePool = null;
         IChatClient? llmClient = null;
         try
         {
@@ -234,6 +235,9 @@ internal static class Program
             {
                 var configPath = Path.Combine(Path.GetDirectoryName(solutionPath)!, "code2obsidian.llm.json");
                 var config = LlmConfigLoader.TryLoad(configPath);
+                var configHasEndpoint = !string.IsNullOrWhiteSpace(config?.Endpoint);
+                var configHasEndpoints = config?.Endpoints is { Length: > 0 };
+                var cliEndpointOverrideProvided = !string.IsNullOrWhiteSpace(llmEndpoint);
 
                 // Expand env vars in CLI API key (same pattern as LlmConfigLoader)
                 if (llmApiKey is not null && llmApiKey.StartsWith('$'))
@@ -283,6 +287,8 @@ internal static class Program
                     {
                         AnsiConsole.MarkupLine("[red]Error:[/] No LLM configuration found and interactive setup unavailable (non-interactive terminal).");
                         AnsiConsole.MarkupLine($"[yellow]Create a config file at:[/] {Markup.Escape(configPath)}");
+                        AnsiConsole.MarkupLine("[yellow]Expected filename:[/] code2obsidian.llm.json");
+                        AnsiConsole.MarkupLine("[yellow]For claude-code, authenticate first:[/] `claude auth login` then `claude auth status`.");
                         AnsiConsole.MarkupLine("[yellow]Or provide --llm-provider and --llm-model on the command line.[/]");
                         return 1;
                     }
@@ -293,21 +299,49 @@ internal static class Program
                     config = config with { TraceCodexWs = true };
                 }
 
-                if (SerenaMcpSettings.IsEnabled(config) &&
-                    !config.Provider.Equals("codex", StringComparison.OrdinalIgnoreCase))
+                var providerCapabilities = ResolveKnownProviderCapabilities(config.Provider);
+                var isCodexProvider = providerCapabilities?.Id.Equals("codex", StringComparison.OrdinalIgnoreCase) == true;
+                var isClaudeCodeProvider = providerCapabilities?.Id.Equals("claude-code", StringComparison.OrdinalIgnoreCase) == true;
+
+                EmitProviderWarnings(config, providerCapabilities);
+
+                var endpointMisuseError = LlmProviderGuidance.GetEndpointMisuseError(
+                    providerCapabilities,
+                    configHasEndpoint,
+                    configHasEndpoints,
+                    cliEndpointOverrideProvided);
+                if (endpointMisuseError is not null)
                 {
-                    AnsiConsole.MarkupLine("[red]Error:[/] Serena MCP symbol lookup is only supported with provider 'codex'.");
+                    AnsiConsole.MarkupLine($"[red]Error:[/] {Markup.Escape(endpointMisuseError)}");
+                    AnsiConsole.MarkupLine(
+                        $"[yellow]{Markup.Escape(LlmProviderGuidance.GetUnsupportedBackendSummary(providerCapabilities!))}[/]");
                     return 1;
                 }
 
-                var manageCodexPool = config.Provider.Equals("codex", StringComparison.OrdinalIgnoreCase) &&
-                    (poolSize is not null || ShouldAutoStartCodexPool(config));
+                if (SerenaMcpSettings.IsEnabled(config) && providerCapabilities?.SupportsSerena != true)
+                {
+                    AnsiConsole.MarkupLine(
+                        $"[red]Error:[/] Serena MCP symbol lookup is not supported with provider '{Markup.Escape(config.Provider)}'. Supported providers: {Markup.Escape(FormatProvidersSupporting(capabilities => capabilities.SupportsSerena))}.");
+                    return 1;
+                }
 
-                if (config.Provider.Equals("codex", StringComparison.OrdinalIgnoreCase) && !manageCodexPool)
+                if (poolSize is not null && providerCapabilities?.SupportsManagedPooling != true)
+                {
+                    AnsiConsole.MarkupLine(
+                        $"[red]Error:[/] --pool-size is not supported with provider '{Markup.Escape(config.Provider)}'. Supported providers: {Markup.Escape(FormatProvidersSupporting(capabilities => capabilities.SupportsManagedPooling))}.");
+                    return 1;
+                }
+
+                var manageCodexPool = isCodexProvider &&
+                    (poolSize is not null || ShouldAutoStartCodexPool(config));
+                var manageClaudePool = isClaudeCodeProvider &&
+                    (poolSize is not null || SerenaMcpSettings.IsEnabled(config));
+
+                if (isCodexProvider && !manageCodexPool)
                 {
                     CodexLogBoard.ConfigureInstances(GetConfiguredEndpoints(config));
                 }
-                else if (!config.Provider.Equals("codex", StringComparison.OrdinalIgnoreCase))
+                else if (!isCodexProvider)
                 {
                     CodexLogBoard.Reset();
                 }
@@ -342,12 +376,6 @@ internal static class Program
                     if (effectivePoolSize < 1)
                     {
                         AnsiConsole.MarkupLine("[red]Error:[/] Codex pool size must be >= 1.");
-                        return 1;
-                    }
-
-                    if (!config.Provider.Equals("codex", StringComparison.OrdinalIgnoreCase))
-                    {
-                        AnsiConsole.MarkupLine("[red]Error:[/] --pool-size can only be used with provider 'codex'.");
                         return 1;
                     }
 
@@ -387,8 +415,48 @@ internal static class Program
                             $"[yellow]Adjusted maxConcurrency to[/] {adjustedConcurrency} to match pool size.");
                     }
                 }
+                else if (manageClaudePool)
+                {
+                    var effectivePoolSize = poolSize ?? 1;
+                    if (effectivePoolSize < 1)
+                    {
+                        AnsiConsole.MarkupLine("[red]Error:[/] Claude pool size must be >= 1.");
+                        return 1;
+                    }
 
-                if (config.Provider.Equals("codex", StringComparison.OrdinalIgnoreCase))
+                    try
+                    {
+                        claudePool = await ClaudeCodeProcessPool.StartAsync(
+                            effectivePoolSize,
+                            config.Serena,
+                            ct);
+                    }
+                    catch (Exception ex)
+                    {
+                        AnsiConsole.MarkupLine($"[red]Claude pool startup failed:[/] {Markup.Escape(ex.Message)}");
+                        return 1;
+                    }
+
+                    var originalConcurrency = config.MaxConcurrency;
+                    config = config with
+                    {
+                        Serena = claudePool.Serena,
+                        MaxConcurrency = claudePool.LaneCount
+                    };
+
+                    if (!string.IsNullOrWhiteSpace(claudePool.BootstrapMessage))
+                        AnsiConsole.MarkupLine($"[green]{Markup.Escape(claudePool.BootstrapMessage)}[/]");
+
+                    AnsiConsole.MarkupLine(
+                        $"[green]Started Claude process pool:[/] {claudePool.LaneCount} lane(s)");
+                    if (config.MaxConcurrency != originalConcurrency)
+                    {
+                        AnsiConsole.MarkupLine(
+                            $"[yellow]Adjusted maxConcurrency to[/] {config.MaxConcurrency} to match Claude lane count.");
+                    }
+                }
+
+                if (isCodexProvider)
                 {
                     var configuredEndpoints = GetConfiguredEndpoints(config);
                     var (reachable, unreachable) = await ProbeCodexEndpointsAsync(configuredEndpoints, ct);
@@ -447,8 +515,7 @@ internal static class Program
                 IChatClient client;
                 Action<Uri, string>? codexEndpointUnavailable = null;
                 Func<Uri, string, CancellationToken, Task>? codexEndpointRecycle = null;
-                if (codexPool is not null &&
-                    config.Provider.Equals("codex", StringComparison.OrdinalIgnoreCase))
+                if (codexPool is not null && isCodexProvider)
                 {
                     codexEndpointUnavailable = (endpoint, reason) =>
                     {
@@ -473,7 +540,8 @@ internal static class Program
                         config,
                         codexEndpointUnavailable,
                         solutionDirectory: Path.GetDirectoryName(solutionPath),
-                        codexEndpointRecycle: codexEndpointRecycle);
+                        codexEndpointRecycle: codexEndpointRecycle,
+                        claudeProcessPool: claudePool);
                     llmClient = client;
                 }
                 catch (InvalidOperationException ex)
@@ -512,19 +580,23 @@ internal static class Program
                 {
                     AnsiConsole.MarkupLine($"[green]LLM enabled ({llmModeText}):[/] {config.Provider}/{config.Model} ([green]{endpointCount} endpoints pooled[/])");
                 }
+                else if (config.Provider.Equals("claude-code", StringComparison.OrdinalIgnoreCase) && claudePool is not null)
+                {
+                    AnsiConsole.MarkupLine($"[green]LLM enabled ({llmModeText}):[/] {config.Provider}/{config.Model} ([green]{claudePool.LaneCount} managed lane(s)[/])");
+                }
                 else
                 {
                     AnsiConsole.MarkupLine($"[green]LLM enabled ({llmModeText}):[/] {config.Provider}/{config.Model}");
                 }
 
-                    if (SerenaMcpSettings.IsEnabled(config))
-                    {
-                        var serenaConfig = SerenaMcpSettings.Normalize(config.Serena)!;
-                        var serenaModeText = serenaConfig.SkipOnboarding
-                            ? "headless, automatic onboarding disabled"
-                            : "headless";
-                        AnsiConsole.MarkupLine($"[green]Serena symbol lookup:[/] enabled ({serenaModeText})");
-                    }
+                if (SerenaMcpSettings.IsEnabled(config))
+                {
+                    var serenaConfig = SerenaMcpSettings.Normalize(config.Serena)!;
+                    var serenaModeText = serenaConfig.SkipOnboarding
+                        ? "headless, automatic onboarding disabled"
+                        : "headless";
+                    AnsiConsole.MarkupLine($"[green]Serena symbol lookup:[/] enabled ({serenaModeText})");
+                }
                 AnsiConsole.WriteLine();
             }
 
@@ -694,6 +766,9 @@ internal static class Program
                 await asyncDisposable.DisposeAsync();
             else if (llmClient is IDisposable disposable)
                 disposable.Dispose();
+
+            if (claudePool is not null)
+                await claudePool.DisposeAsync();
 
             if (codexPool is not null)
                 await codexPool.DisposeAsync();
@@ -1016,6 +1091,53 @@ internal static class Program
             return value;
 
         return value[..(maxChars - 1)] + "…";
+    }
+
+    private static LlmProviderCapabilities? ResolveKnownProviderCapabilities(string provider)
+    {
+        return LlmProviderCatalog.TryGet(provider, out var capabilities) ? capabilities : null;
+    }
+
+    private static string FormatProvidersSupporting(Func<LlmProviderCapabilities, bool> predicate)
+    {
+        var supportedProviders = LlmProviderCatalog.All
+            .Where(predicate)
+            .Select(capabilities => $"'{capabilities.Id}'")
+            .ToArray();
+
+        return supportedProviders.Length == 0
+            ? "none"
+            : string.Join(", ", supportedProviders);
+    }
+
+    private static void EmitProviderWarnings(LlmConfig config, LlmProviderCapabilities? providerCapabilities)
+    {
+        if (providerCapabilities is null || providerCapabilities.ConflictingApiAuthEnvVars.Length == 0)
+            return;
+
+        EmitApiAuthPrecedenceWarning(config, providerCapabilities);
+    }
+
+    private static void EmitApiAuthPrecedenceWarning(LlmConfig config, LlmProviderCapabilities providerCapabilities)
+    {
+        var configuredApiKey = !string.IsNullOrWhiteSpace(config.ApiKey);
+        var conflictingEnvVars = providerCapabilities.ConflictingApiAuthEnvVars
+            .Where(envVar => !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(envVar)))
+            .Select(envVar => $"${envVar}")
+            .ToArray();
+
+        if (!configuredApiKey && conflictingEnvVars.Length == 0)
+            return;
+
+        var authSources = new List<string>();
+        if (configuredApiKey)
+            authSources.Add("config/--llm-api-key");
+        authSources.AddRange(conflictingEnvVars);
+
+        AnsiConsole.MarkupLine(
+            $"[yellow]Warning:[/] {Markup.Escape(LlmProviderGuidance.GetAuthPrecedenceWarning(providerCapabilities, authSources))}");
+        AnsiConsole.MarkupLine(
+            $"[yellow]{Markup.Escape(LlmProviderGuidance.GetAuthPrecedenceRemediation(providerCapabilities))}[/]");
     }
 
     #endregion

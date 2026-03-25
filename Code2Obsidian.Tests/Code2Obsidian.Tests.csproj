@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="Microsoft.Extensions.AI" Version="10.3.0" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.abstractions" Version="2.0.3" GeneratePathProperty="true" />
+    <PackageReference Include="xunit.assert" Version="2.9.3" GeneratePathProperty="true" />
+    <PackageReference Include="xunit.extensibility.core" Version="2.9.3" GeneratePathProperty="true" />
+    <PackageReference Include="xunit.extensibility.execution" Version="2.9.3" GeneratePathProperty="true" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Code2Obsidian.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <Target Name="CopyXunitExecutionAssemblies" AfterTargets="Build">
+    <ItemGroup>
+      <XunitExecutionRuntime Include="$(Pkgxunit_extensibility_execution)\lib\netstandard1.1\xunit.execution.dotnet.dll" />
+      <XunitExecutionRuntime Include="$(Pkgxunit_abstractions)\lib\netstandard2.0\xunit.abstractions.dll" />
+      <XunitExecutionRuntime Include="$(Pkgxunit_extensibility_core)\lib\netstandard1.1\xunit.core.dll" />
+      <XunitExecutionRuntime Include="$(Pkgxunit_assert)\lib\net6.0\xunit.assert.dll" />
+    </ItemGroup>
+
+    <Copy SourceFiles="@(XunitExecutionRuntime)"
+          DestinationFolder="$(OutDir)"
+          SkipUnchangedFiles="true"
+          Condition="Exists('%(XunitExecutionRuntime.Identity)')" />
+  </Target>
+
+</Project>

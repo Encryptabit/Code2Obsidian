@@ -5,6 +5,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <ProduceReferenceAssembly>true</ProduceReferenceAssembly>
   </PropertyGroup>
 
   <ItemGroup>
@@ -21,5 +22,24 @@
     <PackageReference Include="System.CommandLine" Version="2.0.3" />
     <PackageReference Include="Spectre.Console" Version="0.54.0" />
   </ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="Code2Obsidian.Tests/**/*.cs" />
+    <EmbeddedResource Remove="Code2Obsidian.Tests/**/*.resx" />
+  </ItemGroup>
+
+  <Target Name="CopyReferenceAssemblyForNestedTests"
+          AfterTargets="Build"
+          Condition="'$(ProduceReferenceAssembly)' == 'true'">
+    <PropertyGroup>
+      <GeneratedReferenceAssembly>$(MSBuildProjectDirectory)/$(IntermediateOutputPath)refint/$(AssemblyName).dll</GeneratedReferenceAssembly>
+    </PropertyGroup>
+
+    <MakeDir Directories="$(MSBuildProjectDirectory)/$(IntermediateOutputPath)ref"
+             Condition="Exists('$(GeneratedReferenceAssembly)')" />
+    <Copy SourceFiles="$(GeneratedReferenceAssembly)"
+          DestinationFiles="$(TargetRefPath)"
+          Condition="Exists('$(GeneratedReferenceAssembly)') and !Exists('$(TargetRefPath)')" />
+  </Target>
 
 </Project>

@@ -10,56 +10,67 @@ namespace Code2Obsidian.Enrichment.Config;
 /// <summary>
 /// Creates an IChatClient from LLM configuration.
 /// Provider-specific code is isolated here; the enricher only knows IChatClient.
-/// Known providers (anthropic, openai, ollama) have convenience factories.
-/// Unknown providers fall back to OpenAI-compatible endpoint if configured.
+/// First-class providers are defined in <see cref="LlmProviderCatalog"/>.
+/// Unknown providers fall back to OpenAI-compatible endpoints when configured.
 /// </summary>
 public static class ChatClientFactory
 {
-    private static readonly Dictionary<string, Func<LlmConfig, string, IChatClient>> KnownProviders = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly Dictionary<string, Func<LlmConfig, string, IChatClient>> SimpleProviders = new(StringComparer.OrdinalIgnoreCase)
     {
         ["anthropic"] = CreateAnthropicClient,
         ["openai"] = CreateOpenAIClient,
-        ["ollama"] = CreateOllamaClient,
-        ["codex"] = CreateCodexClient
+        ["ollama"] = CreateOllamaClient
     };
 
     /// <summary>
     /// Creates an IChatClient from the given configuration.
     /// </summary>
     /// <exception cref="InvalidOperationException">
-    /// Thrown when the API key env var was not resolved, or when an unknown provider
-    /// has no endpoint configured.
+    /// Thrown when a required API key env var was not resolved, when a recognized provider
+    /// does not yet have a transport implementation, or when an unknown provider has no endpoint configured.
     /// </exception>
     public static IChatClient CreateFromConfig(
         LlmConfig config,
         Action<Uri, string>? codexEndpointUnavailable = null,
         string? solutionDirectory = null,
-        Func<Uri, string, CancellationToken, Task>? codexEndpointRecycle = null)
+        Func<Uri, string, CancellationToken, Task>? codexEndpointRecycle = null,
+        ClaudeCodeProcessPool? claudeProcessPool = null)
     {
-        var apiKey = ResolveApiKey(config);
-
-        if (config.Provider.Equals("codex", StringComparison.OrdinalIgnoreCase))
-            return CreateCodexClient(
-                config,
-                apiKey,
-                codexEndpointUnavailable,
-                solutionDirectory,
-                codexEndpointRecycle);
-
-        if (KnownProviders.TryGetValue(config.Provider, out var factory))
+        if (LlmProviderCatalog.TryGet(config.Provider, out var provider) && provider is not null)
         {
-            return factory(config, apiKey);
+            var apiKey = provider.RequiresApiKey
+                ? ResolveApiKey(config)
+                : string.Empty;
+
+            if (provider.Id.Equals("claude-code", StringComparison.OrdinalIgnoreCase))
+                return CreateClaudeCodeClient(config, solutionDirectory, claudeProcessPool);
+
+            if (provider.Id.Equals("codex", StringComparison.OrdinalIgnoreCase))
+            {
+                return CreateCodexClient(
+                    config,
+                    apiKey,
+                    codexEndpointUnavailable,
+                    solutionDirectory,
+                    codexEndpointRecycle);
+            }
+
+            if (SimpleProviders.TryGetValue(provider.Id, out var factory))
+                return factory(config, apiKey);
+
+            throw new InvalidOperationException(
+                $"Provider '{provider.Id}' is recognized, but no chat client transport is registered for it.");
         }
+
+        var fallbackApiKey = ResolveApiKey(config);
 
         // Unknown provider: try OpenAI-compatible endpoint fallback
         if (!string.IsNullOrEmpty(config.Endpoint))
-        {
-            return CreateOpenAICompatibleClient(config, apiKey);
-        }
+            return CreateOpenAICompatibleClient(config, fallbackApiKey);
 
         throw new InvalidOperationException(
             $"Unknown LLM provider '{config.Provider}'. " +
-            $"Known providers: {string.Join(", ", KnownProviders.Keys)}. " +
+            $"Known providers: {LlmProviderCatalog.FormatKnownProviders()}. " +
             "For other MEAI-compatible providers, set 'endpoint' to an OpenAI-compatible API URL.");
     }
 
@@ -91,6 +102,30 @@ public static class ChatClientFactory
     {
         var endpoint = config.Endpoint ?? "http://localhost:11434";
         return new OllamaApiClient(new Uri(endpoint), config.Model);
+    }
+
+    private static IChatClient CreateClaudeCodeClient(
+        LlmConfig config,
+        string? solutionDirectory,
+        ClaudeCodeProcessPool? claudeProcessPool)
+    {
+        if (claudeProcessPool is null)
+            return new ClaudeCodeChatClient(config.Model, solutionDirectory);
+
+        if (claudeProcessPool.LaneCount == 1)
+            return new ClaudeCodeChatClient(
+                config.Model,
+                solutionDirectory,
+                mcpConfigPath: claudeProcessPool.Lanes[0].McpConfigPath);
+
+        var laneClients = claudeProcessPool.Lanes
+            .Select(lane => (IChatClient)new ClaudeCodeChatClient(
+                config.Model,
+                solutionDirectory,
+                mcpConfigPath: lane.McpConfigPath))
+            .ToArray();
+
+        return new RoundRobinChatClient(laneClients);
     }
 
     private static IChatClient CreateOpenAICompatibleClient(LlmConfig config, string apiKey)

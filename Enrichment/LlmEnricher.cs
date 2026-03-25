@@ -324,14 +324,11 @@ public sealed class LlmEnricher : IEnricher
             var readiness = ParseSerenaReadinessResponse(response.Text);
             if (!readiness.IsReady)
             {
-                var guidance =
-                    " If you are using external Codex websocket endpoints, those endpoints must already expose the Serena MCP server and its onboarding/instructions tools. " +
-                    "If you want Code2Obsidian to inject Serena automatically, rerun with a local Codex app-server pool via --pool-size.";
                 throw new InvalidOperationException(
                     $"Serena is not ready for headless entity enrichment: {readiness.Reason} " +
                     "Automatic Serena onboarding was attempted when needed. " +
-                    "If this still fails, inspect the project's Serena state/logs and then rerun Code2Obsidian." +
-                    guidance);
+                    "If this still fails, inspect the project's Serena state/logs and then rerun Code2Obsidian. " +
+                    BuildSerenaReadinessFailureGuidance());
             }
 
             ReportProgress(
@@ -350,10 +347,35 @@ public sealed class LlmEnricher : IEnricher
         return new[] { _client };
     }
 
+    private string BuildSerenaReadinessFailureGuidance()
+    {
+        var provider = LlmProviderCatalog.Get(_config.Provider);
+        var externalSurface = provider.Id.Equals("claude-code", StringComparison.OrdinalIgnoreCase)
+            ? "claude-code lanes"
+            : provider.Id.Equals("codex", StringComparison.OrdinalIgnoreCase)
+                ? "Codex endpoints or lanes"
+                : $"{provider.Id} runtimes";
+
+        var guidance =
+            $"If you are using externally managed {externalSurface}, those runtimes must already expose the Serena MCP server and its onboarding/instructions tools.";
+
+        if (!provider.SupportsManagedPooling)
+            return guidance;
+
+        var managedSurface = provider.Id.Equals("claude-code", StringComparison.OrdinalIgnoreCase)
+            ? "managed claude-code lanes"
+            : provider.Id.Equals("codex", StringComparison.OrdinalIgnoreCase)
+                ? "managed Codex endpoints"
+                : $"managed {provider.Id} runtimes";
+
+        return guidance +
+               $" If you want Code2Obsidian to inject Serena automatically for provider '{provider.Id}', rerun with --pool-size so it can start {managedSurface}.";
+    }
+
     private static (bool IsReady, string Reason) ParseSerenaReadinessResponse(string raw)
     {
         if (string.IsNullOrWhiteSpace(raw))
-            return (false, "Codex returned an empty Serena readiness response.");
+            return (false, "Provider returned an empty Serena readiness response.");
 
         string? readyValue = null;
         string? reason = null;

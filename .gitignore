@@ -483,3 +483,21 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# ── GSD baseline (auto-generated) ──
+.gsd
+*.swo
+.idea/
+.vscode/
+.env.*
+!.env.example
+.next/
+dist/
+build/
+.venv/
+venv/
+target/
+vendor/
+coverage/
+.cache/
+tmp/
