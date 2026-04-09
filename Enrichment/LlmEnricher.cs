@@ -303,6 +303,13 @@ public sealed class LlmEnricher : IEnricher
         if (!SerenaMcpSettings.IsEnabled(_config))
             return;
 
+        if (_config.SkipOnboarding)
+        {
+            ReportProgress("Skipping Serena onboarding precheck (skipOnboarding: true)", 0, 1, force: true);
+            Interlocked.Exchange(ref _serenaValidated, 1);
+            return;
+        }
+
         if (Interlocked.Exchange(ref _serenaValidated, 1) != 0)
             return;
 
